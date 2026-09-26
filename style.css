@@ -1,0 +1,400 @@
+/* Ali Maps.
+ *
+ * Dark by default, because the map is the page and a dark surround stops the
+ * chrome competing with it. One accent, one road colour, one alarm colour —
+ * a map that uses six is a legend nobody reads.
+ */
+:root {
+  --bg: #0d0f13;
+  --card: #171a21;
+  --edge: #2c323e;
+  --ink: #e9edf3;
+  --dim: #96a0b0;
+  --faint: #68727f;
+  --road: #50e294;
+  --oneway: #56ccf2;
+  --route: #ffd166;
+  --unreached: #d67a8a;
+  --accent: #56ccf2;
+  --warn: #f0913a;
+}
+
+/* The light theme.
+ *
+ * The same variables with the relationship inverted rather than the colours:
+ * pale ground, dark road, dark text. `app.js` carries the matching canvas
+ * palette and the two must move together. */
+body.light {
+  --bg: #f3f1ec;
+  --card: #ffffff;
+  --edge: #d9d4cb;
+  --ink: #171a20;
+  --dim: #5a626d;
+  --faint: #878f9a;
+  --road: #2c7f55;
+  --oneway: #256d94;
+  --route: #d4820a;
+  --unreached: #bb3c56;
+  --accent: #1d6f99;
+  --warn: #a35a00;
+}
+body.light .panel, body.light #nav, body.light #info,
+body.light .badge, body.light .hint, body.light #nav3dwrap {
+  background: rgba(255, 255, 255, .95);
+}
+body.light #raster-toast, body.light .brand {
+  background: rgba(255, 255, 255, .9);
+}
+body.light button:active { background: #eceae4; }
+body.light #steps li.on { background: #eef3f7; }
+body.light #steps li { border-bottom-color: #ece8e1; }
+body.light .credit { background: rgba(243, 241, 236, .8); }
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+}
+
+/* **`width`/`height` are not optional here.**
+ *
+ * A canvas is a replaced element, and an absolutely positioned replaced
+ * element with `width: auto` takes its INTRINSIC size -- the backing store --
+ * rather than its containing block. With `inset: 0` alone the element was
+ * therefore as many CSS pixels wide as the canvas had device pixels: identical
+ * to the viewport on a 1x desktop, and twice the viewport on a 2.6x phone.
+ * The whole map drew at double scale, which is why panning moved further than
+ * the finger and a pinch anchored to the wrong place. */
+#map {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  touch-action: none; display: block;
+}
+
+button, select {
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+button:active { background: #222735; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+
+.top {
+  position: fixed; top: 12px; left: 12px; right: 12px;
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  z-index: 3; pointer-events: none;
+}
+.top > * { pointer-events: auto; }
+#where { color: var(--faint); font-size: 12px; flex: 0 0 auto; }
+/* The theme button says which state it is IN, with a glyph that reads at a
+ * glance: a half-disc for auto, a sun, a moon. */
+#theme .ico { margin-right: 5px; font-size: 13px; line-height: 1; }
+
+/* The provenance badge. The OSM flavour is a tech demo and CLAUDE.md is
+ * unambiguous that an imported network is not a reference for anything this
+ * project claims — so the page says which one is on screen, always, and the
+ * embed cannot hide it. */
+.badge {
+  font-size: 11px; letter-spacing: .3px; padding: 5px 9px;
+  border-radius: 999px; border: 1px solid var(--edge);
+  background: rgba(23, 26, 33, .93); backdrop-filter: blur(8px);
+  /* It is the longest thing in the bar and it may not be squeezed into the
+     readout beside it. */
+  flex: 0 0 auto; white-space: nowrap;
+}
+.badge.imported { border-color: var(--warn); color: var(--warn); }
+.badge.detected { border-color: var(--road); color: var(--road); }
+
+/* ---------------------------------------------------------------- panels */
+.panel {
+  position: fixed; left: 12px; right: 12px; bottom: 12px; max-width: 420px;
+  background: rgba(23, 26, 33, .93); border: 1px solid var(--edge);
+  border-radius: 14px; padding: 12px 14px; backdrop-filter: blur(8px);
+  display: none; z-index: 4;
+}
+.panel.open { display: block; }
+.panel .x {
+  position: absolute; top: 6px; right: 6px; width: 30px; height: 30px;
+  padding: 0; border: 0; background: none; color: var(--faint);
+  font-size: 17px; line-height: 30px; border-radius: 8px;
+}
+.panel .x:active { background: #222735; }
+.panel h1 { margin: 0 0 2px; font-size: 16px; font-weight: 650; letter-spacing: .2px; }
+.panel p { margin: 0; color: var(--dim); font-size: 12.5px; }
+
+#info {
+  position: fixed; left: 12px; bottom: 12px; width: 36px; height: 36px;
+  padding: 0; border-radius: 50%; font-size: 15px; font-style: italic;
+  font-weight: 650; font-family: Georgia, "Times New Roman", serif;
+  background: rgba(23, 26, 33, .93); backdrop-filter: blur(8px); z-index: 4;
+}
+.panel.open ~ #info { display: none; }
+
+.stats { display: flex; gap: 16px; margin-top: 9px; flex-wrap: wrap; }
+.stat b { display: block; font-size: 17px; font-weight: 650; }
+.stat span {
+  font-size: 10.5px; color: var(--faint);
+  text-transform: uppercase; letter-spacing: .6px;
+}
+
+/* ------------------------------------------------------------- the route */
+#nav {
+  position: fixed; left: 12px; right: 12px; bottom: 12px; max-width: 420px;
+  background: rgba(23, 26, 33, .96); border: 1px solid var(--edge);
+  border-radius: 14px; backdrop-filter: blur(10px);
+  display: none; z-index: 5; overflow: hidden;
+}
+#nav.open { display: block; }
+#nav header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px 8px; border-bottom: 1px solid var(--edge);
+}
+
+/* A two-position radio, not a toggle: both states are named and visible, so
+ * the control says which view you are in rather than which one you would get
+ * by pressing it. */
+.seg {
+  margin-left: auto; display: flex; flex: 0 0 auto;
+  background: var(--card); border: 1px solid var(--edge); border-radius: 9px;
+  padding: 2px; gap: 2px;
+}
+.seg button {
+  border: 0; background: none; color: var(--dim);
+  font: 600 11.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 6px 10px; border-radius: 7px; cursor: pointer; min-width: 34px;
+}
+.seg button[aria-checked="true"] { background: var(--edge); color: var(--ink); }
+body.light .seg button[aria-checked="true"] { background: #dfe4ea; }
+#nav header b { font-size: 19px; font-weight: 650; }
+#nav header span { color: var(--dim); font-size: 12.5px; }
+/* **`touch-action: pan-y`, and it is not decoration.** The list is inside a
+ * fixed-position drawer over a canvas that takes every pointer event it can
+ * reach, and a finger that starts on a row has to be allowed to scroll it
+ * rather than be treated as a gesture on something else. `overscroll-behavior`
+ * stops a flick at the end of the list turning into a pull on the page. */
+#steps {
+  max-height: 34vh; overflow-y: auto; margin: 0; padding: 4px 0;
+  list-style: none;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+#steps li {
+  display: flex; gap: 10px; align-items: baseline;
+  padding: 7px 13px; font-size: 13.5px; border-bottom: 1px solid #20242d;
+}
+#steps li:last-child { border-bottom: 0; }
+#steps .turn { color: var(--accent); font-weight: 650; min-width: 15px; }
+/* A walk is not a turn and must not read as one. */
+#steps .turn.walk { color: var(--dim); font-weight: 500; }
+#steps .what { flex: 1; }
+#steps .name { color: var(--dim); }
+#steps .d { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 12px; }
+/* **Empty on a successful route.** Ali asked for the diagnostics gone: how
+ * many milliseconds the plan took and how many corridor tiles were fetched is
+ * a fact about the program, not about the journey, and a drawer sized to show
+ * three instructions cannot afford two lines of it. It still carries the
+ * failure text, which is about the journey. */
+#navfoot { padding: 0; color: var(--faint); font-size: 11.5px; }
+#navfoot:not(:empty) { padding: 8px 13px 10px; }
+#navfoot b { color: var(--dim); font-weight: 600; }
+
+.err { color: var(--unreached); }
+.hint {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px;
+  background: rgba(23, 26, 33, .93); border: 1px solid var(--edge);
+  border-radius: 999px; padding: 7px 14px; font-size: 12.5px; color: var(--dim);
+  backdrop-filter: blur(8px); z-index: 4; white-space: nowrap;
+}
+
+.credit {
+  position: fixed; right: 12px; bottom: 12px; font-size: 10.5px;
+  line-height: 1.45; color: var(--faint); text-align: right;
+  max-width: 42%; z-index: 2;
+  /* The map is behind it and the two were reading as one another's noise. */
+  background: rgba(11, 13, 17, .72); padding: 3px 6px; border-radius: 6px;
+}
+.credit a { color: var(--faint); }
+@media (max-width: 640px) { .credit { display: none; } }
+
+/* Embedded: no chrome, but never anonymous. A map on somebody else's page
+ * still has to say where it came from and that it is unfinished — and, for
+ * the OSM flavour, that it is not our corpus. */
+.brand {
+  display: none; position: fixed; left: 10px; bottom: 9px; z-index: 6;
+  font-size: 11.5px; color: var(--dim); text-decoration: none;
+  background: rgba(13, 15, 19, .72); border: 1px solid var(--edge);
+  border-radius: 8px; padding: 4px 8px;
+}
+body.embed .brand { display: block; }
+body.embed #panel, body.embed #info { display: none !important; }
+body.embed .top { top: 10px; right: 10px; left: auto; justify-content: flex-end; }
+body.embed .top > *:not(.badge) { display: none; }
+body.embed #credit { font-size: 10px; opacity: .85; }
+/* The OSM flavour's credit is a LICENCE obligation, not our own boast, so the
+ * embed may not drop it the way it drops ours. `app.js` marks the element. */
+body.embed #credit .ours { display: none; }
+body.embed #credit .ours.required { display: inline; }
+body.embed #nav { max-width: 300px; }
+
+/* ------------------------------------------------------- the 3d window */
+/* A driver's-eye view of the hovered instruction. Inline on a desktop, where
+ * there is room beside the map; on a phone it takes the whole screen instead,
+ * because a 300 px window on a 390 px screen is too small to read and costs
+ * the map the space it needs. */
+#nav3dwrap {
+  position: fixed; right: 12px; top: 58px; width: 300px;
+  background: rgba(23, 26, 33, .96); border: 1px solid var(--edge);
+  border-radius: 12px; overflow: hidden; z-index: 5; display: none;
+}
+#nav3dwrap.open { display: block; }
+#nav3d { display: block; width: 100%; height: 170px; background: #0b0d11; }
+#nav3dlabel {
+  padding: 7px 10px; font-size: 12px; color: var(--dim);
+  border-top: 1px solid var(--edge); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+#toggle3d { display: none; }
+
+#steps li.on { background: #222a36; }
+#steps li { cursor: default; }
+
+/* The micro toast: which level was rasterised, why, and what it cost. */
+#raster-toast {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 58px;
+  background: rgba(13, 15, 19, .88); border: 1px solid var(--edge);
+  color: var(--faint); font-size: 10.5px; letter-spacing: .2px;
+  padding: 4px 9px; border-radius: 999px; z-index: 6;
+  opacity: 0; transition: opacity .18s ease-in-out; pointer-events: none;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+#raster-toast.show { opacity: 1; }
+
+@media (max-width: 640px) {
+  #nav3dwrap {
+    position: fixed; inset: 0; width: auto; border: 0; border-radius: 0;
+    display: none; z-index: 7;
+  }
+  /* Either-or: the 3d view replaces the map rather than sitting on it. */
+  body.threed #nav3dwrap { display: block; }
+  body.threed #map { visibility: hidden; }
+  body:not(.threed) #nav3dwrap { display: none !important; }
+  #nav3d { height: calc(100vh - 120px); }
+  /* **Only while the 3d view is up.** Going INTO 3d is the radio in the
+   * drawer header; the 3d view then covers the drawer, so the way back has to
+   * float above it. A button offering a view you are already looking at, next
+   * to a radio that says the same thing, is two controls for one decision. */
+  #toggle3d { display: none; }
+  body.threed #toggle3d {
+    display: block; position: fixed; right: 12px; bottom: 12px; z-index: 8;
+  }
+}
+
+/* The top bar on a phone.
+ *
+ * At 412 px the controls wrap onto a second row and the scale readout ends up
+ * underneath them. The badge is the one thing that may not be dropped -- it is
+ * what stops the tech demo being mistaken for the corpus -- so it keeps its
+ * row and the readout goes, since the scale bar already says the same thing
+ * at the bottom of the screen. */
+@media (max-width: 640px) {
+  .top { gap: 6px; }
+  .top button, .top select {
+    padding: 6px 9px; font-size: 12px; border-radius: 9px;
+  }
+  /* **The readout appears while the map moves and fades.** Ali: "i need to
+   * see the zoom level (it can show momentarily or update the hashtag) to
+   * investigate." The toolbar has no room for it on a phone, so it is not
+   * part of the toolbar there -- it floats under it, says z, scale, detail
+   * level and bearing, and goes. The address bar keeps the durable copy. */
+  #where {
+    display: block; position: fixed; left: 50%; transform: translateX(-50%);
+    top: 120px; z-index: 6; pointer-events: none;
+    background: var(--card); border: 1px solid var(--edge);
+    border-radius: 8px; padding: 4px 9px; color: var(--ink);
+    font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap;
+    opacity: 0; transition: opacity .25s;
+  }
+  #where.show { opacity: .94; }
+  .badge { font-size: 10px; padding: 4px 8px; }
+}
+
+/* The first load.
+ *
+ * A city's overview is two megabytes and the routing index is beside it, so
+ * there are a few seconds where a correct page looks like a broken one. It
+ * goes as soon as there is something on the canvas, not on a timer. */
+#loading {
+  position: fixed; inset: 0; z-index: 9; display: flex;
+  align-items: center; justify-content: center; gap: 12px;
+  background: var(--bg); color: var(--dim); font-size: 13px;
+  transition: opacity .35s ease-in-out;
+}
+#loading.gone { opacity: 0; pointer-events: none; }
+#loading .ring {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--edge); border-top-color: var(--road);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  #loading .ring { animation-duration: 2.4s; }
+}
+
+/* Default: no handle. The drawer is a phone affordance and the media query
+ * below turns it on -- which only works if this rule comes FIRST, since two
+ * rules of equal specificity are settled by source order and this one used to
+ * sit after the query and quietly win. */
+#nav .grip { display: none; }
+
+/* **The handle is 38 x 4 px of pill and 26 px of target.** Ali: "i cant drag
+ * the handle." Nobody could: the hit area WAS the pill, four pixels tall on a
+ * screen whose finger is closer to fifty, so a grab landed on the header or
+ * the map and a tap missed more often than it hit. The pill is an `<i>`
+ * inside a full-width button, which is what a thumb is actually aiming at. */
+#nav .grip {
+  border: 0; background: none; padding: 12px 0 8px; margin: 0;
+  width: 100%; cursor: grab; touch-action: none; -webkit-tap-highlight-color: transparent;
+}
+#nav .grip:active { cursor: grabbing; }
+#nav .grip i {
+  display: block; width: 38px; height: 4px; margin: 0 auto;
+  border-radius: 2px; background: var(--edge);
+  transition: background .15s, width .15s;
+}
+#nav .grip:hover i, #nav .grip:active i { background: var(--dim); width: 46px; }
+
+/* The instruction list as a drawer on a phone.
+ *
+ * Ali: "the navigation stages dialog covers the screen. Make it full width but
+ * show maybe 3 rows. Make it a drawer." A panel that takes two thirds of a
+ * 900 px screen leaves no map to check the instructions against, which is the
+ * one thing the list is for. Full width, three rows, and a handle to pull the
+ * rest up when it is wanted. */
+@media (max-width: 640px) {
+  #nav {
+    left: 0; right: 0; bottom: 0; max-width: none;
+    border-radius: 14px 14px 0 0; border-bottom: 0;
+    transition: transform .28s cubic-bezier(.4, 0, .2, 1);
+  }
+  #nav .grip { display: block; }
+  #nav header { padding-top: 2px; }
+  /* **Exactly three rows**, measured from a row rather than guessed at in
+   * pixels -- the height moves with the type size and with a wrapped street
+   * name, and a hard 152px was three rows in one language and two in another.
+   * `--rows` is set by the page once the list has rendered. */
+  #steps { max-height: var(--rows, 108px); }
+  #nav.tall #steps { max-height: 56vh; }
+  #navfoot { padding-bottom: env(safe-area-inset-bottom, 10px); }
+}

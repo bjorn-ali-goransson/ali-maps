@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ali Maps</title>
+<meta name="description" content="A road map of Riyadh built from satellite imagery, from zero. No imported network. Routes in the browser.">
+<link rel="stylesheet" href="../../../style.css?v=32adca7c42">
+</head>
+<body>
+<canvas id="map"></canvas>
+<div id="loading"><div class="ring"></div><span>Loading the map…</span></div>
+
+<div class="top" id="top">
+  <select id="flavor" aria-label="Which map"></select>
+  <select id="area" aria-label="Which district" hidden></select>
+  <button id="fit">Fit</button>
+  <button id="theme" aria-pressed="false">Dark</button>
+  <button id="locate" title="Find me">Locate</button>
+  <span class="badge" id="badge" hidden></span>
+  <span id="where"></span>
+</div>
+
+<div class="panel" id="panel">
+  <button class="x" id="panelclose" aria-label="Close">&times;</button>
+  <h1 id="ptitle">Ali Maps</h1>
+  <p id="sub">loading…</p>
+  <div class="stats" id="stats"></div>
+</div>
+<button id="info" aria-label="About this map" aria-expanded="false">i</button>
+
+<div id="nav">
+  <button class="grip" id="navgrip" aria-label="Close the route"><i></i></button>
+  <header>
+    <b id="navdist">—</b>
+    <span id="navtime"></span>
+    <div class="seg" id="viewmode" role="radiogroup" aria-label="Map view">
+      <button role="radio" data-mode="2d" aria-checked="true">2D</button>
+      <button role="radio" data-mode="3d" aria-checked="false">3D</button>
+    </div>
+  </header>
+  <ol id="steps"></ol>
+  <div id="navfoot"></div>
+</div>
+
+<div id="nav3dwrap">
+  <canvas id="nav3d" width="300" height="170"></canvas>
+  <div id="nav3dlabel">Start of the journey</div>
+  <button id="toggle3d" aria-pressed="false" title="Driver's view">3D</button>
+</div>
+
+<div class="hint" id="hint" hidden></div>
+<div id="raster-toast"></div>
+
+<div class="credit" id="credit"><span class="ours"></span></div>
+<a class="brand" id="brand" href="https://maps.ali-web-services.com/" target="_blank" rel="noopener">Ali Maps</a>
+
+<script>window.ALIMAPS_ROOT = '../../../';</script>
+<script>window.ALIMAPS_DATA = 'https://pub-49a6285381e141dfa1f0e6fcbf475ab6.r2.dev/';</script>
+<script type="module" src="../../../app.js?v=32adca7c42"></script>
+</body>
+</html>

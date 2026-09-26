@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Embedding Ali Maps</title>
+<meta name="description" content="Put an Ali Maps map, or a single route, on your own page.">
+<link rel="stylesheet" href="./style.css?v=32adca7c42">
+<style>
+  body { height: auto; overflow-y: auto; }
+  main { max-width: 780px; margin: 0 auto; padding: 36px 20px 80px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.2px; }
+  h2 { font-size: 16px; margin: 34px 0 10px; letter-spacing: .2px; }
+  p { color: var(--dim); font-size: 14px; }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+  }
+  pre {
+    background: var(--card); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 12px 14px; overflow-x: auto; color: var(--ink);
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--edge); }
+  th { color: var(--faint); font-weight: 600; font-size: 11px;
+       text-transform: uppercase; letter-spacing: .6px; }
+  td code { color: var(--accent); }
+  .frame { border: 1px solid var(--edge); border-radius: 12px; overflow: hidden;
+           margin: 14px 0; background: var(--card); }
+  .frame iframe { display: block; width: 100%; height: 340px; border: 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+         margin: 12px 0; }
+  .row label { font-size: 12px; color: var(--faint); }
+  input, select { background: var(--card); color: var(--ink);
+    border: 1px solid var(--edge); border-radius: 9px; padding: 7px 10px;
+    font: inherit; font-size: 13px; }
+  .note { border-left: 2px solid var(--warn); padding-left: 12px;
+          color: var(--dim); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Embedding Ali Maps</h1>
+<p>One <code>&lt;iframe&gt;</code>. The map draws and routes entirely in the
+visitor's browser against static files — there is no API key, no request to
+us per view, and nothing to rate-limit.</p>
+
+<h2>The snippet</h2>
+<div class="row">
+  <label>Map</label>
+  <select id="f">
+    <option value="corpus">Ali Maps corpus — three districts</option>
+    <option value="osm">Riyadh tech demo — OpenStreetMap</option>
+  </select>
+  <label>Centre</label>
+  <input id="lat" size="9" value="24.8894" aria-label="Latitude">
+  <input id="lon" size="9" value="46.6293" aria-label="Longitude">
+  <label>Across</label>
+  <input id="z" size="5" value="1200" aria-label="Metres across">
+  <label>m</label>
+</div>
+<pre id="snippet">&lt;iframe&gt;&lt;/iframe&gt;</pre>
+<div class="frame"><iframe id="demo" title="Ali Maps preview"
+  loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
+
+<h2>Parameters</h2>
+<table>
+  <tr><th>Name</th><th>Meaning</th></tr>
+  <tr><td><code>f</code></td><td><code>corpus</code> (default) or <code>osm</code>. Which map.</td></tr>
+  <tr><td><code>embed</code></td><td><code>1</code> hides the controls. A framed page is treated as embedded anyway.</td></tr>
+  <tr><td><code>lat</code>, <code>lon</code></td><td>Open on a place rather than fitting everything.</td></tr>
+  <tr><td><code>z</code></td><td>How many metres the view is across. Default 600.</td></tr>
+  <tr><td><code>from</code>, <code>to</code></td><td><code>lat,lon</code> each. Routes on load and fits the result.</td></tr>
+  <tr><td><code>k</code></td><td>How many distinct roads a snap may try. Default 1.</td></tr>
+</table>
+
+<h2>Embedding a route</h2>
+<p>An embed can carry the journey, so a page can link to the route it is
+writing about rather than to a map somebody has to drive themselves.</p>
+<pre>&lt;iframe src="https://maps.ali-web-services.com/?f=osm&amp;from=24.7136,46.6753&amp;to=24.8894,46.6293"
+        width="100%" height="420" style="border:0" loading="lazy"&gt;&lt;/iframe&gt;</pre>
+
+<h2>What the embed will not hide</h2>
+<p class="note">Two things stay on screen whatever the parameters say. The
+<b>OpenStreetMap attribution</b>, because the basemap tiles are visible and
+their licence requires it wherever they are shown. And the <b>provenance
+badge</b>: the Riyadh flavour is a tech demo built from imported OpenStreetMap
+geometry, the corpus flavour is road we detected from imagery ourselves, and
+the two must never be mistaken for one another — including in a screenshot of
+somebody else's page.</p>
+
+<h2>Status</h2>
+<p>In development. The corpus covers three districts of Riyadh and is sparse
+on purpose: it holds only road we have detected, with no network imported from
+anywhere at any stage. Routes that fail are reported as failures rather than
+quietly redrawn, and road we can draw but cannot route on is shown in pink.</p>
+</main>
+
+<script>window.ALIMAPS_DATA = 'https://pub-49a6285381e141dfa1f0e6fcbf475ab6.r2.dev/';</script>
+<script type="module">
+// The snippet and the live preview come from the same builder, so what is
+// shown running is exactly what is offered to copy. A snippet nobody has
+// executed is a suggestion.
+const $ = (id) => document.getElementById(id);
+const ORIGIN = location.origin + location.pathname.replace(/embed\.html$/, '');
+
+function build() {
+  const p = new URLSearchParams();
+  p.set('f', $('f').value);
+  p.set('embed', '1');
+  const lat = parseFloat($('lat').value), lon = parseFloat($('lon').value);
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    p.set('lat', String(lat));
+    p.set('lon', String(lon));
+    p.set('z', String(parseInt($('z').value, 10) || 600));
+  }
+  const url = `${ORIGIN}?${p}`;
+  $('demo').src = url;
+  $('snippet').textContent =
+    `<iframe src="${url}"\n        width="100%" height="420"\n` +
+    `        style="border:0;border-radius:12px"\n` +
+    `        loading="lazy" title="Ali Maps"></iframe>`;
+}
+for (const id of ['f', 'lat', 'lon', 'z']) $(id).addEventListener('input', build);
+build();
+</script>
+</body>
+</html>
