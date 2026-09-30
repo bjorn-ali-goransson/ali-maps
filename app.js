@@ -243,6 +243,33 @@ let heading = 0;
  */
 const TWIST_SLOP = 8 * Math.PI / 180;
 
+/**
+ * A pinch that has clearly become a ZOOM never turns the map.
+ *
+ * Ali: "please snap the north bearing so that any zoom with pinch does not
+ * accidentally start spinning." The slop alone was not enough: a long pinch
+ * wobbles by more than eight degrees simply because it travels further. So
+ * once the fingers have zoomed by this many octaves without having crossed
+ * the twist slop, the gesture is a zoom and the heading is locked for the
+ * rest of it. A deliberate turn starts turning before it zooms that much.
+ */
+const ZOOM_LOCKS_TWIST = 0.35;
+
+/**
+ * A heading this close to north when a gesture ends is snapped back to it.
+ * Nobody means "four degrees east of north"; it is always the leftover of a
+ * zoom, and a map that is almost-but-not-quite north-up is harder to read
+ * than either.
+ */
+const NORTH_SNAP = 12 * Math.PI / 180;
+
+function snapNorth() {
+  if (!heading || northAnim) return;
+  const h = ((heading + Math.PI) % (Math.PI * 2) + Math.PI * 2)
+    % (Math.PI * 2) - Math.PI;
+  if (Math.abs(h) < NORTH_SNAP) faceNorth();
+}
+
 /** Half the viewport, which is what the map turns about. */
 const viewCx = () => cv.width / DPR / 2;
 const viewCy = () => cv.height / DPR / 2;
@@ -2727,6 +2754,106 @@ const SETTLE_HOLD_MS = 600;
 /** And how long the commit takes. Short: this is a resolve, not a transition. */
 
 
+/**
+ * Which level is on screen, and the one fading in over it.
+ *
+ * Ali: "activate the fades again, please. Meaning that we will not hide a
+ * layer until we show the new layer." When the ladder steps to a new level,
+ * the level already on screen stays -- whole, with its own stand-ins -- while
+ * the new one is fetched and rasterised underneath nothing. Once the new one
+ * covers the view it fades in over `LEVEL_FADE_MS`, and only then does it
+ * become the level on screen.
+ *
+ * `LEVEL_WAIT_MAX_MS` is the escape hatch: a level that has not covered the
+ * view by then fades in anyway, holes filled by its own stand-ins, so a tile
+ * that never arrives cannot freeze the map on the wrong level.
+ */
+const LEVEL_WAIT_MAX_MS = 2500;
+const swapState = { cur: null, next: null, since: 0, fadeAt: 0 };
+
+function levelSwap(want, now) {
+  const S = swapState;
+  if (NO_FADE || !S.cur || !layers.levels.get(S.cur)) {
+    S.cur = want.name; S.next = null; S.fadeAt = 0;
+  }
+  if (want.name === S.cur) {
+    S.next = null; S.fadeAt = 0;
+    return { base: S.cur, top: null, alpha: 0 };
+  }
+  if (S.next !== want.name) { S.next = want.name; S.since = now; S.fadeAt = 0; }
+  if (!S.fadeAt
+      && (levelReady(S.next) || now - S.since > LEVEL_WAIT_MAX_MS)) {
+    S.fadeAt = now;
+  }
+  if (!S.fadeAt) {
+    draw();                                   // keep checking until it is ready
+    return { base: S.cur, top: null, alpha: 0 };
+  }
+  const t = Math.min(1, (now - S.fadeAt) / LEVEL_FADE_MS);
+  if (t >= 1) {
+    S.cur = S.next; S.next = null; S.fadeAt = 0;
+    return { base: S.cur, top: null, alpha: 0 };
+  }
+  return { base: S.cur, top: S.next, alpha: ease(t) };
+}
+
+/**
+ * Is this level's picture of the view COMPLETE -- not just finished?
+ *
+ * `levelStale` asks whether every tile in view is done, and a tile is done as
+ * soon as it has been rasterised, including one rasterised before its road
+ * data arrived: an empty square with a refresh pending. Fading a level in on
+ * those and dropping the old one under it was a blank frame, measured, at
+ * the overview-to-wide step. Ready means done, drawn with every data tile it
+ * covers, and not waiting on a refresh.
+ */
+function levelReady(name) {
+  if (levelStale(name)) return false;
+  const oct = octFor(scale);
+  for (const key of visibleKeys(oct)) {
+    const [ix, iy] = key.split(',').map(Number);
+    const rec = rt.get(rtKey(name, oct, ix, iy));
+    if (!rec || !rec.done || !rec.canvas || rec.back) return false;
+    if (rec.missing && rec.missing.length) return false;
+    if (rec.data !== dataEpoch) return false;
+  }
+  return true;
+}
+
+/**
+ * Rasterise the level the zoom is heading for, before it gets there.
+ *
+ * Ali: "we should start loading the new layer when we can see the intent in
+ * the zoom inertia from the user." `predictedScale` is where the view will be
+ * in `PREDICT_S` seconds at its current zoom speed; the tiles are the ones the
+ * current view would need at THAT scale, zoomed about the middle, capped so a
+ * fast fling cannot queue a city.
+ */
+const AHEAD_MAX_TILES = 36;
+
+function pumpAhead(level, s, now, queue) {
+  const oct = octFor(s);
+  const v = viewBox();
+  const cx = (v.x0 + v.x1) / 2, cy = (v.y0 + v.y1) / 2;
+  const f = scale / s;                        // how much of the view survives
+  const k = Math.pow(2, oct) / (scale * TILE_CSS);
+  const ix0 = Math.floor((cx + (v.x0 - cx) * f - ox) * k);
+  const ix1 = Math.floor((cx + (v.x1 - cx) * f - ox) * k);
+  const iy0 = Math.floor((cy + (v.y0 - cy) * f - oy) * k);
+  const iy1 = Math.floor((cy + (v.y1 - cy) * f - oy) * k);
+  if ((ix1 - ix0 + 1) * (iy1 - iy0 + 1) > AHEAD_MAX_TILES) return;
+  const keys = [];
+  for (let ix = ix0; ix <= ix1; ix++) {
+    for (let iy = iy0; iy <= iy1; iy++) keys.push(`${ix},${iy}`);
+  }
+  const req = layers.want(level.name, oct, keys, now);
+  for (const key of [...req.blocking, ...req.streaming]) {
+    const rec = tileRec(level.name, oct, key);
+    rec.used = now;
+    queue.push(rec);
+  }
+}
+
 function paint() {
   return span('frame', () => paintFrame());
 }
@@ -2747,6 +2874,11 @@ function paintFrame() {
   // or has been still for a minute.
   const want = levelFor(area);
   const need = [want];
+  // Where the zoom is heading, if it is heading to a different level: its
+  // data is fetched and its tiles rasterised ahead of arrival.
+  const aheadScale = predictedScale();
+  const ahead0 = levelFor(area, aheadScale);
+  const ahead = ahead0.name !== want.name ? ahead0 : null;
 
   // **Ask for data tiles every frame, whatever the rasteriser is doing.**
   // Fetching used to happen only inside the rasterisation, so while a scene
@@ -2760,6 +2892,9 @@ function paintFrame() {
     // needs -- see `MAX_DECODED_TILES`.
     if (a2.onScreen) a2.onScreen.clear();
     for (const lv of need) visibleGroups(a2, lv);
+    // Data first: the network is the slow half, and the current view's
+    // tiles of the level ahead cover the middle of wherever it lands.
+    if (ahead && ahead.tiled) visibleGroups(a2, ahead);
   }
 
   // Everything from here to `mapOut` is drawn north-up and turned as one.
@@ -2767,6 +2902,10 @@ function paintFrame() {
   const now = performance.now();
   const queue = [];
   for (const lv of need) pumpLevel(lv, now, queue);
+  // Rasterising ahead goes to the back of the line, after everything the
+  // screen needs now: it is a head start, never a delay.
+  const aheadQueue = [];
+  if (ahead && RASTER) pumpAhead(ahead, aheadScale, now, aheadQueue);
   // **A sweep over levels that are live but not drawn was tried and backed
   // out.** With the gate retracted a `mid` layer goes live on one tile, so
   // its unrefreshed tiles sit inside a live plan -- but refreshing them from
@@ -2832,10 +2971,12 @@ function paintFrame() {
     // load-bearing. So they simply always run, underneath, and the live layer
     // covers them as its tiles arrive. There is no decision left to
     // oscillate, which is the whole of the fix.
-    for (const lv of need) {
-      drewSomething = span('ancestors', () => drawAncestors(lv.name, now))
-        || drewSomething;
-    }
+    // **The level on screen stays until the next one is ready, then the
+    // next one fades in over it.** Ali: "activate the fades again ... we will
+    // not hide a layer until we show the new layer." See `levelSwap`.
+    const swap = levelSwap(want, now);
+    drewSomething = span('ancestors', () => drawAncestors(swap.base, now))
+      || drewSomething;
     // **AND THE TWO WHOLE-LEVEL DUMPS ARE GONE.** Ali, looking at the fixed
     // composition: "nothing gets faded out. So full res stuff is still
     // visible in all zoomed out if they were visible when all zoomed in" and
@@ -2852,8 +2993,12 @@ function paintFrame() {
     // Neither is needed now that the stand-in above is per KEY and searches
     // both directions: it fills the holes and paints nothing else, so there
     // is no stale octave to see and no decision to oscillate.
-    drewSomething = drawLevel(want.name, 1, now) || drewSomething;
-    shownLevel = want.name;
+    drewSomething = drawLevel(swap.base, 1, now) || drewSomething;
+    if (swap.top && swap.alpha > 0) {
+      drewSomething = drawLevel(swap.top, swap.alpha, now) || drewSomething;
+      if (swap.alpha < 1) draw();
+    }
+    shownLevel = swap.base;
   });
   if (DEBUG_TILES) labelTiles();
   // On the ground, so it turns with the map -- these are squares of Riyadh,
@@ -2879,6 +3024,8 @@ function paintFrame() {
     return Math.hypot(b2.L + b2.W / 2 - cx0, b2.Tp + b2.H / 2 - cy0);
   };
   queue.sort((p1, p2) => dist(p1) - dist(p2));
+  const seen = new Set(queue.map((r) => r.key));
+  for (const r of aheadQueue) if (!seen.has(r.key)) queue.push(r);
   // **The ripple is fed by the real queue, not by a guess.** Every cell that
   // pulses is ground an object in the bucket is actually being fetched and
   // drawn for; when the queue is empty nothing pulses, because nothing is
@@ -3857,7 +4004,10 @@ cv.addEventListener('pointermove', (e) => {
     // Twist, past the slop and measured from where it crossed.
     let da = Math.atan2(b.y - a.y, b.x - a.x) - pinch.ang;
     da = ((da + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    if (pinch.turning || Math.abs(da) > TWIST_SLOP) {
+    if (!pinch.turning && Math.abs(Math.log2(d / pinch.d)) > ZOOM_LOCKS_TWIST) {
+      pinch.zoomOnly = true;
+    }
+    if (!pinch.zoomOnly && (pinch.turning || Math.abs(da) > TWIST_SLOP)) {
       if (!pinch.turning) {
         pinch.turning = true;
         inputSeen.twist++;
@@ -3897,9 +4047,11 @@ addEventListener('pointercancel', endTwist);
 const lift = (e) => {
   if (twist) { endTwist(); return; }
   const wasLast = pts.size === 1;
+  const wasPinch = !!pinch;
   const [x, y] = at(e);
   pts.delete(e.pointerId);
   begin();
+  if (wasPinch && !pinch) snapNorth();
   // A tap is a pointer that went down and up without travelling. Ten pixels
   // is the slack a thumb needs; below it the map would set a destination
   // every time somebody tried to pan.
@@ -3959,7 +4111,11 @@ function onGestureChange(e) {
   // the compass direction at the top has gone the other way, which is the
   // same sign the two-finger pinch uses.
   let d = ((e.rotation || 0) - gesture.rot0) * Math.PI / 180;
-  if (gesture.turning || Math.abs(d) > TWIST_SLOP) {
+  if (!gesture.turning
+      && Math.abs(Math.log2((e.scale || 1) / gesture.sc0)) > ZOOM_LOCKS_TWIST) {
+    gesture.zoomOnly = true;              // see ZOOM_LOCKS_TWIST
+  }
+  if (!gesture.zoomOnly && (gesture.turning || Math.abs(d) > TWIST_SLOP)) {
     // Past the slop and measured from where it crossed, so the map does not
     // jump by the threshold -- the same rule as a touch twist, and for the
     // same reason: a pinch is never a perfectly fixed line.
@@ -3977,6 +4133,7 @@ function onGestureChange(e) {
 function onGestureEnd(e) {
   e.preventDefault();
   gesture = null;
+  snapNorth();
   settle();
 }
 
@@ -5873,25 +6030,25 @@ let loaded = false;
 // sleeping or when we are reactivating the tab."
 //
 // `version.json` sits beside the page and says which build is live: `v`, the
-// same content hash every page puts on `app.js?v=`, and `commit`, the commit
-// that build came from. THIS script knows its own `v` from its own URL, so
-// the comparison needs nothing baked in by hand. A different `v` means the
-// site has moved on: reload -- the view survives in the hash -- and say so
-// once the new page is up.
+// content hash every page puts on `app.js?v=`, and `commit`, the commit that
+// build came from. **The page's own reference is simply the first answer it
+// gets**, a few seconds after it starts -- Ali: "that will be its own
+// reference point so it can never be out of sync." Any later answer that
+// differs means the site has moved on: reload -- the view survives in the
+// hash -- and say so once the new page is up.
 
-/** The build this script is, from `app.js?v=...`. Empty when unversioned. */
-const BUILD_V = new URL(import.meta.url).searchParams.get('v') || '';
 const VERSION_URL = new URL('./version.json', import.meta.url);
 const UPDATE_EVERY_MS = 5 * 60 * 1000;
 /** Never ask more often than this, however many wake-ups arrive at once. */
 const UPDATE_MIN_GAP_MS = 20 * 1000;
 const UPDATED_KEY = 'alimaps-updated-to';
-const TRIED_KEY = 'alimaps-update-tried';
 
 let updateAskedAt = 0, updateTickAt = Date.now(), updatePending = null;
+/** The build this page started on, from its first look at version.json. */
+let baseBuild = null;
 
 async function checkForUpdate(force = false) {
-  if (!BUILD_V || updatePending) return;
+  if (updatePending) return;
   const now = Date.now();
   if (!force && now - updateAskedAt < UPDATE_MIN_GAP_MS) return;
   updateAskedAt = now;
@@ -5901,14 +6058,9 @@ async function checkForUpdate(force = false) {
     if (!r.ok) return;
     live = await r.json();
   } catch (e) { return; }                     // offline: ask again later
-  if (!live || !live.v || live.v === BUILD_V) return;
-  // **One reload per new build, never a loop.** If a reload onto `live.v`
-  // already happened in this tab and we are STILL the old build, the page
-  // came back from a stale cache; reloading again would spin for ever.
-  try {
-    if (sessionStorage.getItem(TRIED_KEY) === live.v) return;
-    sessionStorage.setItem(TRIED_KEY, live.v);
-  } catch (e) { return; }                     // cannot remember: do not risk it
+  if (!live || !live.v) return;
+  if (!baseBuild) { baseBuild = live; return; }   // the reference point
+  if (live.v === baseBuild.v) return;
   updatePending = live;
   reloadWhenIdle();
 }
@@ -5925,7 +6077,7 @@ function reloadWhenIdle() {
   }
   try {
     sessionStorage.setItem(UPDATED_KEY,
-      JSON.stringify({ from: BUILD_V, to: updatePending.v,
+      JSON.stringify({ to: updatePending.v,
                        commit: updatePending.commit || '' }));
   } catch (e) { /* private mode: reload without the notice */ }
   location.reload();
@@ -5938,8 +6090,7 @@ function announceUpdate() {
     note = JSON.parse(sessionStorage.getItem(UPDATED_KEY) || 'null');
     sessionStorage.removeItem(UPDATED_KEY);
   } catch (e) { return; }
-  // Only if the reload actually landed on a newer build.
-  if (!note || note.from === BUILD_V) return;
+  if (!note) return;
   const el = document.createElement('div');
   el.id = 'update-toast';
   el.setAttribute('role', 'status');
@@ -5969,13 +6120,13 @@ document.addEventListener('visibilitychange', () => {
 addEventListener('focus', () => checkForUpdate());
 addEventListener('pageshow', (e) => { if (e.persisted) checkForUpdate(true); });
 addEventListener('online', () => checkForUpdate(true));
-// And once shortly after load, for a page that came out of a stale cache.
+// And once shortly after load, which takes the reference point.
 setTimeout(() => checkForUpdate(true), 3000);
 
 window.__alimaps = {
   /** True once the flavour, its areas and the initial framing are all in. */
   get loaded() { return loaded; },
-  state, rasterStats, tiles: rt, layers,
+  state, rasterStats, tiles: rt, layers, swap: swapState,
   view: () => ({ mpp: mpp(), ox, oy, scale }),
   level: () => state.areas.map(a => a.index && levelFor(a).name),
   // Rasterise everything the view is waiting on, synchronously. Tests need a

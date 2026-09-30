@@ -25,5 +25,8 @@ git diff --cached --quiet || git commit -q -m "${1:-Publish}"
 C=$(git rev-parse HEAD)
 printf '{"v": "%s", "commit": "%s"}\n' "$V" "$C" > version.json
 git add version.json
-git diff --cached --quiet || git commit -q -m "Stamp version.json: build $V from ${C:0:7}"
+# DEPLOY_TRAILER, if set, is appended to the stamp commit's message too.
+git diff --cached --quiet || git commit -q -m "Stamp version.json: build $V from ${C:0:7}${DEPLOY_TRAILER:+
+
+$DEPLOY_TRAILER}"
 echo "build $V · commit ${C:0:7}"
