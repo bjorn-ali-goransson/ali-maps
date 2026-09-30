@@ -2555,6 +2555,10 @@ function drawTileDebug(want) {
  * and the banner says whether the rasteriser ran this frame, or was skipped
  * because painting had already used up `OVERRUN_MS`.
  */
+/** How long the view must be still before the debug overlay is drawn. */
+const DEBUG_SETTLE_MS = 500;
+let debugSig = '', debugMovedAt = 0, debugTimer = 0;
+
 const RDBG = { paintMs: 0, queue: [], stepped: null, skipRun: 0, skipped: 0 };
 
 function rasterStatus(rec, qi) {
@@ -2594,7 +2598,6 @@ function drawRasterDebug(want) {
   if (keys.length > 400) return;
   const qIndex = new Map(RDBG.queue.map((r, i) => [r.key, i]));
   ctx.save();
-  ctx.setLineDash([6, 4]);
   for (const key of keys) {
     const [ix, iy] = key.split(',').map(Number);
     const b = tileBox(oct, ix, iy);
@@ -2613,7 +2616,6 @@ function drawRasterDebug(want) {
     const lines = [`raster ${ix},${iy} ${want.name} @${oct}`,
                    ...rasterStatus(rec, qi)];
     ctx.save();
-    ctx.setLineDash([]);
     ctx.translate(b.L + b.W / 2, b.Tp + b.H / 2 + 60);
     if (heading) ctx.rotate(heading);
     ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -2904,13 +2906,25 @@ function paintFrame() {
 
   // After the rasteriser has had its turn, so the debug drawing can never be
   // the thing that pushes a frame past `OVERRUN_MS`.
-  mapIn();
-  drawTileDebug(want);
-  drawRasterDebug(want);
-  mapOut();
+  //
+  // **Held back while the view moves.** Ali: "add a delay when I zoom so
+  // that there is not so much jitter from the debug output." The overlay
+  // appears once the view has been still for DEBUG_SETTLE_MS.
+  const viewSig = `${scale}|${ox}|${oy}|${heading}`;
+  if (viewSig !== debugSig) { debugSig = viewSig; debugMovedAt = now; }
+  const still = performance.now() - debugMovedAt >= DEBUG_SETTLE_MS;
+  if (still) {
+    mapIn();
+    drawTileDebug(want);
+    drawRasterDebug(want);
+    mapOut();
+  } else if (!debugTimer) {
+    debugTimer = setTimeout(() => { debugTimer = 0; draw(); },
+      DEBUG_SETTLE_MS - (performance.now() - debugMovedAt) + 20);
+  }
 
   drawOverlay(w, h, drewSomething);
-  drawRasterBanner();
+  if (still) drawRasterBanner();
 }
 
 /** The route, the pins and the scale bar: tens of paths, redrawn every frame. */
