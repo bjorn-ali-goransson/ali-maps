@@ -436,28 +436,62 @@ function visibleGroups(area, level) {
     }
     if (area.pending.has(key)) continue;
     area.pending.add(key);
+    // What happened to this tile, for the on-map debug labels.
+    const why = tileWhy(area, key);
+    why.s = 'fetching';
+    why.t = performance.now();
+    why.fetches++;
     fetch(`${area.base}/${key}.alimap`)
-      .then(r => (r.ok ? r.arrayBuffer() : null))
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.arrayBuffer();
+      }, (e) => { throw new Error(`network: ${e.message || e}`); })
       .then(b => {
-        if (!b) return;
-        area.tiles.set(key, readDrawTile(b).lines);
+        let lines;
+        try { lines = readDrawTile(b).lines; } catch (e) {
+          throw new Error(`decode: ${e.message || e}`);
+        }
+        area.tiles.set(key, lines);
+        why.s = 'ok';
+        why.lines = lines.length;
+        why.bytes = b.byteLength;
+        why.ms = Math.round(performance.now() - why.t);
         while (area.tiles.size > MAX_DECODED_TILES) {
           // Never the one just decoded, and never one the view is using.
           const oldest = [...area.tiles.keys()]
             .find((k) => k !== key && !area.onScreen.has(k));
           if (oldest === undefined) break;
           area.tiles.delete(oldest);
+          const ow = tileWhy(area, oldest);
+          ow.s = 'evicted';
+          ow.evictions++;
           rasterStats.evicted++;
         }
         invalidate();
       })
-      .catch(() => {})
+      .catch((e) => {
+        why.s = 'failed';
+        why.err = e.message || String(e);
+        why.failures++;
+      })
       .finally(() => { area.pending.delete(key); draw(); });
   }
   // While a closer level is still arriving, keep showing the coarser one
   // rather than blanking the map under somebody's finger.
   if (!out.length && area.overview) return [area.overview];
   return out;
+}
+
+/** The debug record of one data tile: what last happened to it, and why. */
+function tileWhy(area, key) {
+  const why = area.why || (area.why = new Map());
+  let w = why.get(key);
+  if (!w) {
+    w = { s: 'new', t: 0, fetches: 0, failures: 0, evictions: 0,
+          err: '', lines: 0, bytes: 0, ms: 0 };
+    why.set(key, w);
+  }
+  return w;
 }
 
 // ------------------------------------------------------------------ drawing
@@ -1207,9 +1241,14 @@ function stepTile(rec, budget) {
   if (!rec.jobs) {
     const level = levelNamed(rec.lv);
     const groups = [];
+    // Which data tiles this raster tile is being drawn WITHOUT, so the debug
+    // labels can say "rasterised before its data arrived".
+    rec.missing = [];
     for (const area of state.areas) {
       if (!area.index || !level) continue;
-      for (const lines of groupsUnder(area, level, rec)) groups.push(lines);
+      for (const lines of groupsUnder(area, level, rec, rec.missing)) {
+        groups.push(lines);
+      }
     }
     // Two passes over EVERYTHING, not one per road: a kerb drawn straight
     // after its own carriageway is overpainted by the next road's carriageway
@@ -1360,7 +1399,7 @@ function stepTile(rec, budget) {
  */
 const GROUP_HALO_M = 120;
 
-function groupsUnder(area, level, rec) {
+function groupsUnder(area, level, rec, missing) {
   const ref = Math.pow(2, rec.oct);
   const lon0 = (rec.ix * TILE_CSS) / (KX * ref);
   const lon1 = ((rec.ix + 1) * TILE_CSS) / (KX * ref);
@@ -1378,6 +1417,7 @@ function groupsUnder(area, level, rec) {
     if (ty2lat(y + 1, z) > no || ty2lat(y, z) < so) continue;
     const hit = area.tiles.get(`${x}_${y}${level.suffix}`);
     if (hit) out.push(hit);
+    else if (missing) missing.push(`${x}_${y}${level.suffix}`);
   }
   if (!level.tiled && area.overview) out.push(area.overview);
   return out;
@@ -2351,6 +2391,124 @@ function levelStaleNow(name) {
 }
 
 /**
+ * Every data tile near the view, outlined and labelled with WHY it is or is
+ * not on the map.
+ *
+ * Ali: "add a faded color to any tile that is loading", "only to show it when
+ * fetching though", "add outlines for each tile so I can easily see", and
+ * then: "I really want to see why a tile is not rendering. Maybe it has been
+ * evicted by the size of the tile cache or whatever. Or the loading failed
+ * for whatever reason. But in any case, I need to know the reason."
+ *
+ * A data tile's ground is washed by its state -- magenta while fetching, red
+ * after a failure, orange once evicted, grey where the index has no file at
+ * all -- and labelled with the state, its road count and the raster tiles
+ * covering it at the octave on screen: how many are drawn, how many are
+ * still waiting, and how many were drawn before this data arrived.
+ */
+const DEBUG_WASH = {
+  fetching: 'rgba(255, 0, 200, 0.22)',
+  failed: 'rgba(230, 30, 30, 0.30)',
+  evicted: 'rgba(255, 140, 0, 0.25)',
+  absent: 'rgba(120, 120, 120, 0.18)',
+};
+
+function drawTileDebug(want) {
+  // The overview is one file for the whole area, not a grid of tiles.
+  if (!want.tiled) return;
+  const vb = viewBox();
+  const oct = octFor(scale);
+  const raster = [...rt.values()].filter((r) => r.lv === want.name
+    && r.oct === oct);
+  const now = performance.now();
+  ctx.save();
+  ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  for (const a2 of state.areas) {
+    if (!a2.index) continue;
+    const z = a2.index.zoom;
+    const [tx0, ty0] = tileOf(lonAt(vb.x0), latAt(vb.y0), z);
+    const [tx1, ty1] = tileOf(lonAt(vb.x1), latAt(vb.y1), z);
+    // Zoomed far out the grid is thousands of cells of hairline; skip it.
+    if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 1500) continue;
+    const have = new Set(a2.index.tiles.map(([x, y]) => `${x}_${y}`));
+    for (let x = tx0; x <= tx1; x++) {
+      for (let y = ty0; y <= ty1; y++) {
+        const key = `${x}_${y}${want.suffix || ''}`;
+        const w0 = tx2lon(x, z), e0 = tx2lon(x + 1, z);
+        const n0 = ty2lat(y, z), s0 = ty2lat(y + 1, z);
+        const L = sx(w0), R = sx(e0), Tp = sy(n0), B = sy(s0);
+        const lines = [`${x}_${y} ${want.name}`];
+        let wash = null;
+        if (!have.has(`${x}_${y}`)) {
+          wash = DEBUG_WASH.absent;
+          lines.push('no file: not in index');
+        } else {
+          const w = a2.why && a2.why.get(key);
+          const cached = a2.tiles.has(key);
+          if (!w) lines.push(cached ? 'in memory' : 'never requested');
+          else if (w.s === 'fetching') {
+            wash = DEBUG_WASH.fetching;
+            lines.push(`fetching ${((now - w.t) / 1000).toFixed(1)}s`
+              + (w.fetches > 1 ? ` (try ${w.fetches})` : ''));
+          } else if (w.s === 'failed') {
+            wash = DEBUG_WASH.failed;
+            lines.push(`FAILED: ${w.err}`);
+          } else if (w.s === 'evicted' && !cached) {
+            wash = DEBUG_WASH.evicted;
+            lines.push(`EVICTED: cache full (${MAX_DECODED_TILES})`);
+          } else {
+            lines.push(`loaded · ${w.lines} roads · ${(w.bytes / 1024)
+              .toFixed(0)} kB · ${w.ms} ms`
+              + (w.lines === 0 ? ' · EMPTY' : ''));
+          }
+          if (w && w.failures && w.s !== 'failed') {
+            lines.push(`${w.failures} failure(s), last: ${w.err}`);
+          }
+          if (w && w.evictions) lines.push(`evicted ${w.evictions}x so far`);
+          // The raster tiles at the octave on screen that cover this one.
+          let done = 0, waiting = 0, without = 0;
+          for (const r of raster) {
+            const ref = Math.pow(2, r.oct);
+            const rw = (r.ix * TILE_CSS) / (KX * ref);
+            const re = ((r.ix + 1) * TILE_CSS) / (KX * ref);
+            const rn = -(r.iy * TILE_CSS) / ref;
+            const rs = -((r.iy + 1) * TILE_CSS) / ref;
+            if (re < w0 || rw > e0 || rn < s0 || rs > n0) continue;
+            if (!r.done) waiting++;
+            else done++;
+            if (r.done && !r.back && r.missing && r.missing.includes(key)) {
+              without++;
+            }
+          }
+          lines.push(`raster @${oct}: ${done} drawn, ${waiting} waiting`
+            + (without ? ` · ${without} DRAWN WITHOUT THIS DATA` : ''));
+        }
+        if (wash) { ctx.fillStyle = wash; ctx.fillRect(L, Tp, R - L, B - Tp); }
+        ctx.strokeStyle = 'rgba(255, 0, 200, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(L, Tp, R - L, B - Tp);
+        if (R - L < 90) continue;
+        // Pinned to the part of the tile that is on screen, clear of the
+        // toolbar, so a tile bigger than the screen still says what it is.
+        const lx = Math.max(L, vb.x0 + 4), ly = Math.max(Tp, vb.y0 + 150);
+        const room = Math.min(R, vb.x1 - 4) - lx;
+        const tall = lines.length * 13 + 4;
+        if (room < 90 || ly + tall > B) continue;
+        const tw = Math.max(...lines.map((t) => ctx.measureText(t).width));
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(lx + 3, ly + 3, Math.min(tw + 8, room - 6), tall);
+        ctx.fillStyle = '#fff';
+        lines.forEach((t, i) => ctx.fillText(t, lx + 7, ly + 5 + i * 13,
+          room - 14));
+      }
+    }
+  }
+  ctx.restore();
+}
+
+/**
  * `?tiles=1` writes the level, octave and index on every tile.
  *
  * Ali: "you're very much free to render the level reference on each tile so I
@@ -2539,46 +2697,7 @@ function paintFrame() {
     shownLevel = want.name;
   });
   if (DEBUG_TILES) labelTiles();
-  // Ali: "add a faded color to any tile that is loading so i can debug
-  // something" -- "only to show it when fetching though." Every data tile
-  // with a request in flight gets a translucent wash over its ground until
-  // the response lands; rasterising alone does not count.
-  ctx.save();
-  ctx.fillStyle = 'rgba(255, 0, 200, 0.22)';
-  for (const a2 of state.areas) {
-    if (!a2.index || !a2.pending || !a2.pending.size) continue;
-    const n = 2 ** a2.index.zoom;
-    const lonOf = (x) => x / n * 360 - 180;
-    const latOf = (y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)))
-      * 180 / Math.PI;
-    for (const key of a2.pending) {
-      const [x, y] = key.split('_').map((t) => parseInt(t, 10));
-      const L = sx(lonOf(x)), R = sx(lonOf(x + 1));
-      const Tp = sy(latOf(y)), B = sy(latOf(y + 1));
-      ctx.fillRect(L, Tp, R - L, B - Tp);
-    }
-  }
-  // Ali: "Can you also add outlines for each tile so I can easily see?"
-  // Every data tile near the view, loaded or not, gets its edge drawn.
-  ctx.strokeStyle = 'rgba(255, 0, 200, 0.7)';
-  ctx.lineWidth = 1;
-  const vb = viewBox();
-  for (const a2 of state.areas) {
-    if (!a2.index) continue;
-    const z = a2.index.zoom, n = 2 ** z;
-    const lonOf = (x) => x / n * 360 - 180;
-    const latOf = (y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)))
-      * 180 / Math.PI;
-    const [tx0, ty0] = tileOf(lonAt(vb.x0), latAt(vb.y0), z);
-    const [tx1, ty1] = tileOf(lonAt(vb.x1), latAt(vb.y1), z);
-    for (const [x, y] of a2.index.tiles) {
-      if (x < tx0 - 1 || x > tx1 + 1 || y < ty0 - 1 || y > ty1 + 1) continue;
-      const L = sx(lonOf(x)), R = sx(lonOf(x + 1));
-      const Tp = sy(latOf(y)), B = sy(latOf(y + 1));
-      ctx.strokeRect(L, Tp, R - L, B - Tp);
-    }
-  }
-  ctx.restore();
+  drawTileDebug(want);
   // On the ground, so it turns with the map -- these are squares of Riyadh,
   // not marks on the glass.
   if (span('ripple', () => drawRipples(now, pendingKeys))) draw();
