@@ -2555,6 +2555,12 @@ function drawTileDebug(want) {
  * and the banner says whether the rasteriser ran this frame, or was skipped
  * because painting had already used up `OVERRUN_MS`.
  */
+/**
+ * The tile debug overlay is off unless `?debug=1`. Ali: "It seems fixed now.
+ * You can hide the debug output behind a query string."
+ */
+const DEBUG_ON = Q.get('debug') === '1';
+
 /** How long the view must be still before the debug overlay is drawn. */
 const DEBUG_SETTLE_MS = 500;
 let debugSig = '', debugMovedAt = 0, debugTimer = 0;
@@ -2912,13 +2918,14 @@ function paintFrame() {
   // appears once the view has been still for DEBUG_SETTLE_MS.
   const viewSig = `${scale}|${ox}|${oy}|${heading}`;
   if (viewSig !== debugSig) { debugSig = viewSig; debugMovedAt = now; }
-  const still = performance.now() - debugMovedAt >= DEBUG_SETTLE_MS;
+  const still = DEBUG_ON
+    && performance.now() - debugMovedAt >= DEBUG_SETTLE_MS;
   if (still) {
     mapIn();
     drawTileDebug(want);
     drawRasterDebug(want);
     mapOut();
-  } else if (!debugTimer) {
+  } else if (DEBUG_ON && !debugTimer) {
     debugTimer = setTimeout(() => { debugTimer = 0; draw(); },
       DEBUG_SETTLE_MS - (performance.now() - debugMovedAt) + 20);
   }
