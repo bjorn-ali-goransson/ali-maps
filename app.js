@@ -2558,6 +2558,26 @@ function paintFrame() {
       ctx.fillRect(L, Tp, R - L, B - Tp);
     }
   }
+  // Ali: "Can you also add outlines for each tile so I can easily see?"
+  // Every data tile near the view, loaded or not, gets its edge drawn.
+  ctx.strokeStyle = 'rgba(255, 0, 200, 0.7)';
+  ctx.lineWidth = 1;
+  const vb = viewBox();
+  for (const a2 of state.areas) {
+    if (!a2.index) continue;
+    const z = a2.index.zoom, n = 2 ** z;
+    const lonOf = (x) => x / n * 360 - 180;
+    const latOf = (y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)))
+      * 180 / Math.PI;
+    const [tx0, ty0] = tileOf(lonAt(vb.x0), latAt(vb.y0), z);
+    const [tx1, ty1] = tileOf(lonAt(vb.x1), latAt(vb.y1), z);
+    for (const [x, y] of a2.index.tiles) {
+      if (x < tx0 - 1 || x > tx1 + 1 || y < ty0 - 1 || y > ty1 + 1) continue;
+      const L = sx(lonOf(x)), R = sx(lonOf(x + 1));
+      const Tp = sy(latOf(y)), B = sy(latOf(y + 1));
+      ctx.strokeRect(L, Tp, R - L, B - Tp);
+    }
+  }
   ctx.restore();
   // On the ground, so it turns with the map -- these are squares of Riyadh,
   // not marks on the glass.
