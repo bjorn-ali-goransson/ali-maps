@@ -452,7 +452,7 @@ function visibleGroups(area, level) {
         invalidate();
       })
       .catch(() => {})
-      .finally(() => area.pending.delete(key));
+      .finally(() => { area.pending.delete(key); draw(); });
   }
   // While a closer level is still arriving, keep showing the coarser one
   // rather than blanking the map under somebody's finger.
@@ -2540,13 +2540,23 @@ function paintFrame() {
   });
   if (DEBUG_TILES) labelTiles();
   // Ali: "add a faded color to any tile that is loading so i can debug
-  // something." Every tile in the queue -- fetching, rasterising or
-  // refreshing -- gets a translucent wash until it is finished.
+  // something" -- "only to show it when fetching though." Every data tile
+  // with a request in flight gets a translucent wash over its ground until
+  // the response lands; rasterising alone does not count.
   ctx.save();
   ctx.fillStyle = 'rgba(255, 0, 200, 0.22)';
-  for (const rec of queue) {
-    const b = tileBox(rec.oct, rec.ix, rec.iy);
-    if (tileOnScreen(b)) ctx.fillRect(b.L, b.Tp, b.W, b.H);
+  for (const a2 of state.areas) {
+    if (!a2.index || !a2.pending || !a2.pending.size) continue;
+    const n = 2 ** a2.index.zoom;
+    const lonOf = (x) => x / n * 360 - 180;
+    const latOf = (y) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)))
+      * 180 / Math.PI;
+    for (const key of a2.pending) {
+      const [x, y] = key.split('_').map((t) => parseInt(t, 10));
+      const L = sx(lonOf(x)), R = sx(lonOf(x + 1));
+      const Tp = sy(latOf(y)), B = sy(latOf(y + 1));
+      ctx.fillRect(L, Tp, R - L, B - Tp);
+    }
   }
   ctx.restore();
   // On the ground, so it turns with the map -- these are squares of Riyadh,
