@@ -24,7 +24,7 @@
 
 import { readDrawTile } from './alimap.js';
 import { TileStore } from './engine/store.js';
-import { LayerSet } from './layers.js';
+import { LayerSet } from './layers.js?v=39b3a6fc61';
 import { route as planAndRoute, Subgraph } from './engine/router.js';
 import { tileOf, metres } from './engine/tiles.js';
 
@@ -1467,6 +1467,9 @@ function evictTiles() {
     rt.delete(rec.key);
     rtBytes -= rec.bytes + (rec.back ? rec.back.bytes : 0);
     rasterStats.evicted++;
+    // Tell the layer, or it goes on calling this tile done and never asks
+    // for it again -- see `LayerSet.tileLost`.
+    if (rec.done) layers.tileLost(rec.lv, rec.oct, `${rec.ix},${rec.iy}`);
   }
 }
 
@@ -1986,6 +1989,7 @@ function tileRec(name, oct, key) {
   if (rec && rec.dpr !== DPR) {
     rt.delete(k);
     rtBytes -= rec.bytes + (rec.back ? rec.back.bytes : 0);
+    if (rec.done) layers.tileLost(name, oct, key);
     rec = null;
   }
   if (!rec) rec = newTile(name, oct, ix, iy);
@@ -5842,7 +5846,7 @@ let loaded = false;
 window.__alimaps = {
   /** True once the flavour, its areas and the initial framing are all in. */
   get loaded() { return loaded; },
-  state, rasterStats, tiles: rt,
+  state, rasterStats, tiles: rt, layers,
   view: () => ({ mpp: mpp(), ox, oy, scale }),
   level: () => state.areas.map(a => a.index && levelFor(a).name),
   // Rasterise everything the view is waiting on, synchronously. Tests need a

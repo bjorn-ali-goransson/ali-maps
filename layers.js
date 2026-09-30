@@ -305,6 +305,28 @@ export class LayerSet {
     };
   }
 
+  /**
+   * A finished tile's pixels were thrown away by the cache.
+   *
+   * **Without this, an evicted tile is a permanent hole.** Ali, after zooming
+   * in and back out: every empty square said "waiting, never started, NOT IN
+   * QUEUE" with the cache at 109/110 MB. The cache had dropped the tiles, but
+   * the layer still listed them as done, so `want` never asked for them
+   * again -- and the fresh, empty record made in their place was never
+   * queued by anyone. Forgetting the key makes `want` return it as streaming
+   * the next time the view needs it.
+   */
+  tileLost(name, oct, key) {
+    const layer = this._layer(name, oct);
+    if (!layer) return false;
+    // A live layer only ever asks for STREAMING keys, and promotion left the
+    // tiles that were already done in `blocking`. Left there, a lost one is
+    // pending in a set nobody reads: measured, `wide|13|902|-530` stuck at
+    // "blocking, not done" on a live layer for as long as the page was open.
+    if (layer.state !== BUILDING) layer.blocking.delete(key);
+    return layer.done.delete(key);
+  }
+
   /** Every layer this level is holding, for eviction and for tests. */
   held(name) {
     const L = this.levels.get(name);
