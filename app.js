@@ -2794,6 +2794,10 @@ function levelSwap(want, now) {
     S.cur = S.next; S.next = null; S.fadeAt = 0;
     return { base: S.cur, top: null, alpha: 0 };
   }
+  // Every frame of a fade asks for the next one -- including the first, at
+  // alpha 0, which drew nothing and so asked for nothing: a still view then
+  // sat at the start of its fade for ever.
+  draw();
   return { base: S.cur, top: S.next, alpha: ease(t) };
 }
 
@@ -2975,7 +2979,17 @@ function paintFrame() {
     // next one fades in over it.** Ali: "activate the fades again ... we will
     // not hide a layer until we show the new layer." See `levelSwap`.
     const swap = levelSwap(want, now);
-    drewSomething = span('ancestors', () => drawAncestors(swap.base, now))
+    // **A crossfade, drawn as the new level UNDER the old one fading out.**
+    // Ali: "I see fading in, but I don't see fading out." The first version
+    // faded the new level in over the old one at full strength and then
+    // dropped the old one in a single frame -- so a zoom out, where the old
+    // level carries the small streets the new one leaves out, lost them in
+    // one step. The new level is complete by the time a fade starts, so it
+    // goes underneath at full strength and the old one dissolves off it:
+    // nothing thins, and what disappears, disappears gradually.
+    const fading = swap.top && swap.alpha > 0;
+    const under = fading ? swap.top : swap.base;
+    drewSomething = span('ancestors', () => drawAncestors(under, now))
       || drewSomething;
     // **AND THE TWO WHOLE-LEVEL DUMPS ARE GONE.** Ali, looking at the fixed
     // composition: "nothing gets faded out. So full res stuff is still
@@ -2993,12 +3007,16 @@ function paintFrame() {
     // Neither is needed now that the stand-in above is per KEY and searches
     // both directions: it fills the holes and paints nothing else, so there
     // is no stale octave to see and no decision to oscillate.
-    drewSomething = drawLevel(swap.base, 1, now) || drewSomething;
-    if (swap.top && swap.alpha > 0) {
-      drewSomething = drawLevel(swap.top, swap.alpha, now) || drewSomething;
-      if (swap.alpha < 1) draw();
+    drewSomething = drawLevel(under, 1, now) || drewSomething;
+    if (fading) {
+      const out = 1 - swap.alpha;
+      ctx.globalAlpha = out;
+      drawAncestors(swap.base, now);
+      ctx.globalAlpha = 1;
+      drawLevel(swap.base, out, now);
+      draw();
     }
-    shownLevel = swap.base;
+    shownLevel = under;
   });
   if (DEBUG_TILES) labelTiles();
   // On the ground, so it turns with the map -- these are squares of Riyadh,
