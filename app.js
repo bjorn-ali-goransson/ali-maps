@@ -2490,6 +2490,36 @@ function drawTileDebug(want) {
         ctx.lineWidth = 1;
         ctx.strokeRect(L, Tp, R - L, B - Tp);
         if (R - L < 90) continue;
+        // The reference and the level in the middle of the tile -- the middle
+        // of the part on screen, so a tile bigger than the screen shows it too.
+        const sub = `level ${want.name} · z${z} · raster @${oct}`;
+        const bigFont = '700 18px ui-monospace, SFMono-Regular, Menlo, monospace';
+        const subFont = '600 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+        ctx.font = subFont;
+        const half = ctx.measureText(sub).width / 2 + 8;
+        ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+        const cx = Math.min(Math.max((L + R) / 2, vb.x0 + half), vb.x1 - half);
+        const cy = Math.min(Math.max((Tp + B) / 2, vb.y0 + 230), vb.y1 - 120);
+        // Kept inside the tile's visible part; squeezed if it is narrow.
+        const vl = Math.max(L, vb.x0), vr = Math.min(R, vb.x1);
+        const mx = Math.min(Math.max(cx, vl + 40), vr - 40);
+        const fit = 2 * Math.min(mx - vl, vr - mx) - 8;
+        if (fit > 60 && cy > Tp + 110 && cy < B - 20) {
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.fillStyle = '#b0009a';
+          ctx.font = bigFont;
+          ctx.strokeText(`${x}_${y}`, mx, cy - 11, fit);
+          ctx.fillText(`${x}_${y}`, mx, cy - 11, fit);
+          ctx.font = subFont;
+          ctx.strokeText(sub, mx, cy + 9, fit);
+          ctx.fillText(sub, mx, cy + 9, fit);
+          ctx.restore();
+        }
         // Pinned to the part of the tile that is on screen, clear of the
         // toolbar, so a tile bigger than the screen still says what it is.
         const lx = Math.max(L, vb.x0 + 4), ly = Math.max(Tp, vb.y0 + 150);
