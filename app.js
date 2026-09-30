@@ -2539,6 +2539,16 @@ function paintFrame() {
     shownLevel = want.name;
   });
   if (DEBUG_TILES) labelTiles();
+  // Ali: "add a faded color to any tile that is loading so i can debug
+  // something." Every tile in the queue -- fetching, rasterising or
+  // refreshing -- gets a translucent wash until it is finished.
+  ctx.save();
+  ctx.fillStyle = 'rgba(255, 0, 200, 0.22)';
+  for (const rec of queue) {
+    const b = tileBox(rec.oct, rec.ix, rec.iy);
+    if (tileOnScreen(b)) ctx.fillRect(b.L, b.Tp, b.W, b.H);
+  }
+  ctx.restore();
   // On the ground, so it turns with the map -- these are squares of Riyadh,
   // not marks on the glass.
   if (span('ripple', () => drawRipples(now, pendingKeys))) draw();
