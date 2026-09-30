@@ -2769,6 +2769,8 @@ const SETTLE_HOLD_MS = 600;
  * that never arrives cannot freeze the map on the wrong level.
  */
 const LEVEL_WAIT_MAX_MS = 2500;
+/** The whole swap: the new level fading in, then the old one fading out. */
+const LEVEL_SWAP_MS = 700;
 const swapState = { cur: null, next: null, since: 0, fadeAt: 0 };
 
 function levelSwap(want, now) {
@@ -2789,7 +2791,7 @@ function levelSwap(want, now) {
     draw();                                   // keep checking until it is ready
     return { base: S.cur, top: null, alpha: 0 };
   }
-  const t = Math.min(1, (now - S.fadeAt) / LEVEL_FADE_MS);
+  const t = Math.min(1, (now - S.fadeAt) / LEVEL_SWAP_MS);
   if (t >= 1) {
     S.cur = S.next; S.next = null; S.fadeAt = 0;
     return { base: S.cur, top: null, alpha: 0 };
@@ -2798,7 +2800,7 @@ function levelSwap(want, now) {
   // alpha 0, which drew nothing and so asked for nothing: a still view then
   // sat at the start of its fade for ever.
   draw();
-  return { base: S.cur, top: S.next, alpha: ease(t) };
+  return { base: S.cur, top: S.next, alpha: t };
 }
 
 /**
@@ -2979,44 +2981,35 @@ function paintFrame() {
     // next one fades in over it.** Ali: "activate the fades again ... we will
     // not hide a layer until we show the new layer." See `levelSwap`.
     const swap = levelSwap(want, now);
-    // **A crossfade, drawn as the new level UNDER the old one fading out.**
-    // Ali: "I see fading in, but I don't see fading out." The first version
-    // faded the new level in over the old one at full strength and then
-    // dropped the old one in a single frame -- so a zoom out, where the old
-    // level carries the small streets the new one leaves out, lost them in
-    // one step. The new level is complete by the time a fade starts, so it
-    // goes underneath at full strength and the old one dissolves off it:
-    // nothing thins, and what disappears, disappears gradually.
-    const fading = swap.top && swap.alpha > 0;
-    const under = fading ? swap.top : swap.base;
-    drewSomething = span('ancestors', () => drawAncestors(under, now))
+    // **In, then out -- one picture handed over in two halves.**
+    //
+    // Ali, first: "I see fading in, but I don't see fading out" -- the new
+    // level faded in over the old one, and the old one's own streets were
+    // then dropped in a single frame. Then, with the new level drawn under
+    // the old one fading out: "they don't really fade in anymore at all" --
+    // the new level's own streets now arrived in a single frame instead. A
+    // plain crossfade of the two at partial strength thins the whole map in
+    // the middle.
+    //
+    // So: for the first half the old level stays whole and the new one fades
+    // in OVER it; for the second the new one stays whole on top and the old
+    // one fades out UNDER it. The last frame of one half and the first of the
+    // other are the same picture, so the hand-over has no seam, and every
+    // street that appears or disappears does so gradually.
+    const fading = !!swap.top;
+    const p = swap.alpha;                     // 0..1 through the swap
+    const oldAlpha = !fading || p <= 0.5 ? 1 : 1 - ease(p * 2 - 1);
+    const newAlpha = !fading ? 0 : p >= 0.5 ? 1 : ease(p * 2);
+    ctx.globalAlpha = oldAlpha;
+    drewSomething = span('ancestors', () => drawAncestors(swap.base, now))
       || drewSomething;
-    // **AND THE TWO WHOLE-LEVEL DUMPS ARE GONE.** Ali, looking at the fixed
-    // composition: "nothing gets faded out. So full res stuff is still
-    // visible in all zoomed out if they were visible when all zoomed in" and
-    // "the really low res stuff for zoomed out tiles are still visible when
-    // all zoomed in, on top of the high res tiles."
-    //
-    // Both were `drawLeftovers`, which painted EVERY finished tile of a level
-    // at EVERY octave, coarsest first so the finest landed on top. Gated on
-    // `levelStale` that was rare; unconditional -- which is what stopped the
-    // flicker -- it meant a fine tile from a close-up visit was repainted
-    // over the overview for the rest of the session. `drawFallback` did the
-    // same across LEVELS.
-    //
-    // Neither is needed now that the stand-in above is per KEY and searches
-    // both directions: it fills the holes and paints nothing else, so there
-    // is no stale octave to see and no decision to oscillate.
-    drewSomething = drawLevel(under, 1, now) || drewSomething;
-    if (fading) {
-      const out = 1 - swap.alpha;
-      ctx.globalAlpha = out;
-      drawAncestors(swap.base, now);
-      ctx.globalAlpha = 1;
-      drawLevel(swap.base, out, now);
-      draw();
+    ctx.globalAlpha = 1;
+    drewSomething = drawLevel(swap.base, oldAlpha, now) || drewSomething;
+    if (fading && newAlpha > 0) {
+      if (newAlpha >= 1) drawAncestors(swap.top, now);   // its holes, if any
+      drewSomething = drawLevel(swap.top, newAlpha, now) || drewSomething;
     }
-    shownLevel = under;
+    shownLevel = fading && p >= 0.5 ? swap.top : swap.base;
   });
   if (DEBUG_TILES) labelTiles();
   // On the ground, so it turns with the map -- these are squares of Riyadh,
