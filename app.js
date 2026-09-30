@@ -5864,6 +5864,114 @@ document.addEventListener('visibilitychange', () => {
 // cannot quietly regress.
 let loaded = false;
 
+// ------------------------------------------------------------ live updates
+//
+// Ali: "insert the commit hash ... in a file that the JavaScript will
+// periodically check so that we know when we should update the website. And
+// after doing that, we should tell the user that we have updated to the
+// latest version. This check should also be done when the browser has been
+// sleeping or when we are reactivating the tab."
+//
+// `version.json` sits beside the page and says which build is live: `v`, the
+// same content hash every page puts on `app.js?v=`, and `commit`, the commit
+// that build came from. THIS script knows its own `v` from its own URL, so
+// the comparison needs nothing baked in by hand. A different `v` means the
+// site has moved on: reload -- the view survives in the hash -- and say so
+// once the new page is up.
+
+/** The build this script is, from `app.js?v=...`. Empty when unversioned. */
+const BUILD_V = new URL(import.meta.url).searchParams.get('v') || '';
+const VERSION_URL = new URL('./version.json', import.meta.url);
+const UPDATE_EVERY_MS = 5 * 60 * 1000;
+/** Never ask more often than this, however many wake-ups arrive at once. */
+const UPDATE_MIN_GAP_MS = 20 * 1000;
+const UPDATED_KEY = 'alimaps-updated-to';
+const TRIED_KEY = 'alimaps-update-tried';
+
+let updateAskedAt = 0, updateTickAt = Date.now(), updatePending = null;
+
+async function checkForUpdate(force = false) {
+  if (!BUILD_V || updatePending) return;
+  const now = Date.now();
+  if (!force && now - updateAskedAt < UPDATE_MIN_GAP_MS) return;
+  updateAskedAt = now;
+  let live;
+  try {
+    const r = await fetch(`${VERSION_URL.href}?t=${now}`, { cache: 'no-store' });
+    if (!r.ok) return;
+    live = await r.json();
+  } catch (e) { return; }                     // offline: ask again later
+  if (!live || !live.v || live.v === BUILD_V) return;
+  // **One reload per new build, never a loop.** If a reload onto `live.v`
+  // already happened in this tab and we are STILL the old build, the page
+  // came back from a stale cache; reloading again would spin for ever.
+  try {
+    if (sessionStorage.getItem(TRIED_KEY) === live.v) return;
+    sessionStorage.setItem(TRIED_KEY, live.v);
+  } catch (e) { return; }                     // cannot remember: do not risk it
+  updatePending = live;
+  reloadWhenIdle();
+}
+
+/**
+ * Reload, but never under somebody's finger. A hidden tab reloads when it is
+ * next shown (the check runs again then anyway); a visible one waits for the
+ * gesture to finish.
+ */
+function reloadWhenIdle() {
+  if (document.hidden || gesturing) {
+    setTimeout(reloadWhenIdle, 1500);
+    return;
+  }
+  try {
+    sessionStorage.setItem(UPDATED_KEY,
+      JSON.stringify({ from: BUILD_V, to: updatePending.v,
+                       commit: updatePending.commit || '' }));
+  } catch (e) { /* private mode: reload without the notice */ }
+  location.reload();
+}
+
+/** After an update reload: tell the person, once. */
+function announceUpdate() {
+  let note = null;
+  try {
+    note = JSON.parse(sessionStorage.getItem(UPDATED_KEY) || 'null');
+    sessionStorage.removeItem(UPDATED_KEY);
+  } catch (e) { return; }
+  // Only if the reload actually landed on a newer build.
+  if (!note || note.from === BUILD_V) return;
+  const el = document.createElement('div');
+  el.id = 'update-toast';
+  el.setAttribute('role', 'status');
+  el.textContent = 'Updated to the latest version'
+    + (note.commit ? ` · ${String(note.commit).slice(0, 7)}` : '');
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => el.classList.remove('show'), 4000);
+  setTimeout(() => el.remove(), 4600);
+}
+
+announceUpdate();
+// Every few minutes while open...
+setInterval(() => {
+  // ...and a tick that arrives far later than it should means the machine
+  // was asleep: check at once rather than after the minimum gap.
+  const now = Date.now();
+  const slept = now - updateTickAt > UPDATE_EVERY_MS * 2;
+  updateTickAt = now;
+  checkForUpdate(slept);
+}, UPDATE_EVERY_MS);
+// ...when the tab is shown again, the window regains focus, the page comes
+// back from the back/forward cache, or the network returns.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkForUpdate();
+});
+addEventListener('focus', () => checkForUpdate());
+addEventListener('pageshow', (e) => { if (e.persisted) checkForUpdate(true); });
+addEventListener('online', () => checkForUpdate(true));
+// And once shortly after load, for a page that came out of a stale cache.
+setTimeout(() => checkForUpdate(true), 3000);
+
 window.__alimaps = {
   /** True once the flavour, its areas and the initial framing are all in. */
   get loaded() { return loaded; },

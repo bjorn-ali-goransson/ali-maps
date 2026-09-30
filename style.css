@@ -410,3 +410,15 @@ body.embed #nav { max-width: 300px; }
   #nav.tall #steps { max-height: 56vh; }
   #navfoot { padding-bottom: env(safe-area-inset-bottom, 10px); }
 }
+
+/* Shown once after the page reloads itself onto a newer build. */
+#update-toast {
+  position: fixed; left: 50%; transform: translateX(-50%); top: 84px;
+  background: var(--card); border: 1px solid var(--edge); color: var(--ink);
+  font-size: 13px; padding: 7px 14px; border-radius: 999px; z-index: 20;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+  opacity: 0; transition: opacity .25s ease-in-out; pointer-events: none;
+  white-space: nowrap; max-width: calc(100vw - 32px);
+  overflow: hidden; text-overflow: ellipsis;
+}
+#update-toast.show { opacity: 1; }
