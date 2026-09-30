@@ -2499,7 +2499,7 @@ function drawTileDebug(want) {
         const half = ctx.measureText(sub).width / 2 + 8;
         ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
         const cx = Math.min(Math.max((L + R) / 2, vb.x0 + half), vb.x1 - half);
-        const cy = Math.min(Math.max((Tp + B) / 2, vb.y0 + 230), vb.y1 - 120);
+        const cy = Math.min(Math.max((Tp + B) / 2, vb.y0 + 270), vb.y1 - 120);
         // Kept inside the tile's visible part; squeezed if it is narrow.
         const vl = Math.max(L, vb.x0), vr = Math.min(R, vb.x1);
         const mx = Math.min(Math.max(cx, vl + 40), vr - 40);
@@ -2512,17 +2512,19 @@ function drawTileDebug(want) {
           ctx.lineWidth = 4;
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
           ctx.fillStyle = '#b0009a';
+          ctx.translate(mx, cy);
+          if (heading) ctx.rotate(heading);         // upright on the glass
           ctx.font = bigFont;
-          ctx.strokeText(`${x}_${y}`, mx, cy - 11, fit);
-          ctx.fillText(`${x}_${y}`, mx, cy - 11, fit);
+          ctx.strokeText(`${x}_${y}`, 0, -11, fit);
+          ctx.fillText(`${x}_${y}`, 0, -11, fit);
           ctx.font = subFont;
-          ctx.strokeText(sub, mx, cy + 9, fit);
-          ctx.fillText(sub, mx, cy + 9, fit);
+          ctx.strokeText(sub, 0, 9, fit);
+          ctx.fillText(sub, 0, 9, fit);
           ctx.restore();
         }
         // Pinned to the part of the tile that is on screen, clear of the
         // toolbar, so a tile bigger than the screen still says what it is.
-        const lx = Math.max(L, vb.x0 + 4), ly = Math.max(Tp, vb.y0 + 150);
+        const lx = Math.max(L, vb.x0 + 4), ly = Math.max(Tp, vb.y0 + 190);
         const room = Math.min(R, vb.x1 - 4) - lx;
         const tall = lines.length * 13 + 4;
         if (room < 90 || ly + tall > B) continue;
@@ -2535,6 +2537,121 @@ function drawTileDebug(want) {
       }
     }
   }
+  ctx.restore();
+}
+
+/**
+ * The same, for the RASTER tiles: the drawn bitmaps the screen is made of.
+ *
+ * Ali, looking at a data tile that said "loaded · 11367 roads" and
+ * "raster @15: 0 drawn, 6 waiting" over three empty squares: the data was
+ * there and the pictures were not. So each raster tile at the octave on
+ * screen gets a cyan outline and a label in its middle saying whether it is
+ * drawn, drawing (and how far), queued (and where), or not queued at all --
+ * and the banner says whether the rasteriser ran this frame, or was skipped
+ * because painting had already used up `OVERRUN_MS`.
+ */
+const RDBG = { paintMs: 0, queue: [], stepped: null, skipRun: 0, skipped: 0 };
+
+function rasterStatus(rec, qi) {
+  if (!rec) return ['NO RECORD', 'never queued'];
+  const out = [];
+  const prog = rec.jobs
+    ? `job ${rec.job}/${rec.jobs.length} · line ${rec.line}` : '';
+  if (rec.done && !rec.back) {
+    out.push(`drawn · ${rec.paths.toLocaleString()} paths`);
+  } else if (rec.back) {
+    out.push('refreshing (data changed)');
+  } else if (rec.steps) {
+    out.push('drawing, unfinished');
+  } else {
+    out.push('waiting, never started');
+  }
+  if (!rec.done || rec.back) {
+    out.push(qi >= 0 ? `queued #${qi + 1} of ${RDBG.queue.length}`
+                     : 'NOT IN QUEUE this frame');
+    if (prog) out.push(prog);
+    out.push(`${rec.steps || 0} slices` + (rec.lastStep
+      ? `, last ${((performance.now() - rec.lastStep) / 1000).toFixed(1)}s ago`
+      : ''));
+  }
+  if (rec.missing && rec.missing.length && !rec.back) {
+    out.push(`drawn WITHOUT ${rec.missing.length} data tile(s)`);
+  }
+  if (rec.data !== dataEpoch && rec.done && !rec.back) {
+    out.push('out of date (data epoch)');
+  }
+  return out;
+}
+
+function drawRasterDebug(want) {
+  const oct = octFor(scale);
+  const keys = visibleKeys(oct);
+  if (keys.length > 400) return;
+  const qIndex = new Map(RDBG.queue.map((r, i) => [r.key, i]));
+  ctx.save();
+  ctx.setLineDash([6, 4]);
+  for (const key of keys) {
+    const [ix, iy] = key.split(',').map(Number);
+    const b = tileBox(oct, ix, iy);
+    if (!tileOnScreen(b)) continue;
+    const rec = rt.get(rtKey(want.name, oct, ix, iy));
+    const qi = rec ? (qIndex.has(rec.key) ? qIndex.get(rec.key) : -1) : -1;
+    const ok = rec && rec.done && !rec.back;
+    ctx.strokeStyle = ok ? 'rgba(0, 150, 200, 0.6)' : 'rgba(0, 190, 255, 0.95)';
+    ctx.lineWidth = ok ? 1 : 2;
+    ctx.strokeRect(b.L + 1, b.Tp + 1, b.W - 2, b.H - 2);
+    if (!ok) {
+      ctx.fillStyle = 'rgba(0, 190, 255, 0.10)';
+      ctx.fillRect(b.L, b.Tp, b.W, b.H);
+    }
+    // Upright whatever the map's bearing, at the middle of the tile.
+    const lines = [`raster ${ix},${iy} ${want.name} @${oct}`,
+                   ...rasterStatus(rec, qi)];
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.translate(b.L + b.W / 2, b.Tp + b.H / 2 + 60);
+    if (heading) ctx.rotate(heading);
+    ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const tw = Math.max(...lines.map((t) => ctx.measureText(t).width));
+    ctx.fillStyle = ok ? 'rgba(0, 60, 90, 0.55)' : 'rgba(0, 70, 110, 0.85)';
+    ctx.fillRect(-tw / 2 - 5, -3, tw + 10, lines.length * 14 + 4);
+    ctx.fillStyle = '#e8fbff';
+    lines.forEach((t, i) => ctx.fillText(t, 0, i * 14));
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/** One upright line on the glass: did the rasteriser run this frame, and why not. */
+function drawRasterBanner() {
+  const q = RDBG.queue.length;
+  let msg;
+  if (!q) msg = 'raster: queue empty, nothing to draw';
+  else if (RDBG.stepped) {
+    msg = `raster: drew a slice of ${RDBG.stepped.key} · paint ${
+      RDBG.paintMs.toFixed(1)} ms < ${OVERRUN_MS} ms budget · queue ${q}`;
+  } else {
+    msg = `raster SKIPPED: paint took ${RDBG.paintMs.toFixed(1)} ms >= ${
+      OVERRUN_MS} ms budget · ${RDBG.skipRun} frames in a row · queue ${q}`;
+  }
+  const msg2 = `skipped ${RDBG.skipped} frames total · ${rt.size} raster tiles `
+    + `· ${(rtBytes / 1e6).toFixed(0)}/${(RT_MAX_BYTES / 1e6).toFixed(0)} MB`
+    + ` · ${rasterStats.evicted} evicted`;
+  ctx.save();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const w = Math.max(ctx.measureText(msg).width, ctx.measureText(msg2).width);
+  ctx.fillStyle = RDBG.stepped || !q ? 'rgba(0, 0, 0, 0.7)'
+                                      : 'rgba(170, 0, 0, 0.85)';
+  ctx.fillRect(8, 150, w + 12, 34);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(msg, 14, 154);
+  ctx.fillText(msg2, 14, 169);
   ctx.restore();
 }
 
@@ -2727,7 +2844,6 @@ function paintFrame() {
     shownLevel = want.name;
   });
   if (DEBUG_TILES) labelTiles();
-  drawTileDebug(want);
   // On the ground, so it turns with the map -- these are squares of Riyadh,
   // not marks on the glass.
   if (span('ripple', () => drawRipples(now, pendingKeys))) draw();
@@ -2758,8 +2874,21 @@ function paintFrame() {
 
   evictTiles();
   const budget = gesturing ? SLICE_GESTURE_MS : SLICE_MS;
+  // What the rasteriser did this frame, for the debug overlay.
+  const paintMs = performance.now() - frameStart;
+  RDBG.paintMs = paintMs;
+  RDBG.queue = queue;
+  RDBG.stepped = null;
+  if (queue.length && paintMs >= OVERRUN_MS) {
+    RDBG.skipRun++;
+    RDBG.skipped++;
+  }
   if (queue.length && performance.now() - frameStart < OVERRUN_MS) {
     const rec = queue[0];
+    RDBG.skipRun = 0;
+    RDBG.stepped = rec;
+    rec.steps = (rec.steps || 0) + 1;
+    rec.lastStep = performance.now();
     if (span('raster:tile', () => stepTile(rec, budget))) {
       noteLoaded(rec, performance.now());
       toastRaster(`${rec.lv} · tile · ${rasterStats.lastMs} ms · `
@@ -2769,7 +2898,15 @@ function paintFrame() {
   }
   if (queue.length || !drewSomething) draw();
 
+  // After the rasteriser has had its turn, so the debug drawing can never be
+  // the thing that pushes a frame past `OVERRUN_MS`.
+  mapIn();
+  drawTileDebug(want);
+  drawRasterDebug(want);
+  mapOut();
+
   drawOverlay(w, h, drewSomething);
+  drawRasterBanner();
 }
 
 /** The route, the pins and the scale bar: tens of paths, redrawn every frame. */
