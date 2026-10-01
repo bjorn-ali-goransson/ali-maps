@@ -1033,6 +1033,8 @@ const LOAD_BLIP_AFTER_MS = 180;
 const LOAD_BLIP_MAX_SCREENS = 1.5;
 /** key -> when it was first seen waiting. */
 const loadingSince = new Map();
+/** key -> the start of the last ping it was given, so each cycle pings once. */
+const lastPing = new Map();
 
 let lastBlips = null;
 
@@ -1084,33 +1086,37 @@ function drawLoadingBlips(want, now) {
   lastBlips = { want: want && want.name, oct: octFor(scale), spots: spots.length };
   const seen = new Set();
   let live = false;
-  ctx.save();
-  ctx.lineWidth = 2;
   for (const [key, cx, cy, w] of spots) {
     seen.add(key);
     if (!loadingSince.has(key)) loadingSince.set(key, now);
     live = true;                              // keep frames coming while waiting
     if (w > big) continue;
     // **The navigation blip, exactly** -- Ali: "use the same radar blip as
-    // is used when navigation happens." `drawBlips`' ring for a route tile:
-    // 2 px, growing to half the tile's width over `BLIP_RING_MS` and fading
-    // as it grows. A tile still waiting pings again every `LOAD_BLIP_MS`;
-    // a forced level swap restarts the ping on everything still missing.
+    // is used when navigation happens." A tile still waiting pings every
+    // `LOAD_BLIP_MS`; a forced level swap restarts the ping on everything
+    // still missing.
     let start = loadingSince.get(key) + LOAD_BLIP_AFTER_MS;
     const fa = swapState.forcedAt;
     if (fa && fa > start && now - fa < LOAD_BLIP_MS) start = fa;
     if (now < start) continue;
-    const age = (now - start) % LOAD_BLIP_MS;
-    if (age > BLIP_RING_MS) continue;         // between pings
-    const t = age / BLIP_RING_MS;
-    ctx.globalAlpha = (1 - t) * 0.85;
-    ctx.strokeStyle = T.blip;
-    ctx.beginPath();
-    ctx.arc(cx, cy, Math.max(1, ease(t) * (w / 2)), 0, Math.PI * 2);
-    ctx.stroke();
+    const cycle = start + Math.floor((now - start) / LOAD_BLIP_MS) * LOAD_BLIP_MS;
+    if (lastPing.get(key) === cycle || now - cycle > BLIP_RING_MS / 2) continue;
+    lastPing.set(key, cycle);
+    // **Handed to the navigation blips, which always play to the end.** Ali:
+    // "I see them when they are just three pixels small, then they disappear
+    // at once. Complete the radar blip ... don't simply delete them mid
+    // blip." Drawn here, a ring lived only while its tile was still waiting,
+    // so the tile landing -- or a zoom moving it to another octave -- cut it
+    // off a few pixels in. A ping in `blips` is a fact on the ground, not a
+    // state: it is placed in lon/lat at the visible middle of the tile, the
+    // width of the tile, and runs its full `BLIP_RING_MS` whatever happens
+    // to the tile meanwhile. Same list, same drawing, same look.
+    const lon = (cx - ox) / (KX * scale), lat = -(cy - oy) / scale;
+    const half = w / 2 / (KX * scale);
+    blips.push({ kind: 'route', w: lon - half, e: lon + half, n: lat, s: lat,
+                 t0: cycle });
+    if (blips.length > 200) blips.shift();
   }
-  ctx.globalAlpha = 1;
-  ctx.restore();
   for (const k of loadingSince.keys()) if (!seen.has(k)) loadingSince.delete(k);
   return live;
 }
