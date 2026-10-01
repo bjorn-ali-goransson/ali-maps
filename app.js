@@ -974,6 +974,9 @@ const LOAD_BLIP_MS = 1300;
 const LOAD_BLIP_R = 22;
 /** A tile has to wait this long to get a ring: a quick one never flickers. */
 const LOAD_BLIP_AFTER_MS = 180;
+/** The one brighter, wider ping on what was missing when a swap was forced. */
+const FORCED_BLIP_MS = 800;
+const FORCED_BLIP_R = 40;
 /** A tile wider than this many screens gets no ring at all. */
 const LOAD_BLIP_MAX_SCREENS = 1.5;
 /** key -> when it was first seen waiting. */
@@ -1019,6 +1022,18 @@ function drawLoadingBlips(want, now) {
     if (!loadingSince.has(key)) loadingSince.set(key, now);
     live = true;                              // keep frames coming while waiting
     if (w > big) continue;
+    // The layer was shown before this tile arrived: say so, once and louder.
+    const fa = now - swapState.forcedAt;
+    if (swapState.forcedAt && fa >= 0 && fa < FORCED_BLIP_MS) {
+      const ft = fa / FORCED_BLIP_MS;
+      ctx.globalAlpha = 0.9 * (1 - ft);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(2, ease(ft) * Math.min(FORCED_BLIP_R, w / 2)),
+              0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+    }
     const t0 = loadingSince.get(key) + LOAD_BLIP_AFTER_MS;
     if (now < t0) continue;
     const t = ((now - t0) % LOAD_BLIP_MS) / LOAD_BLIP_MS;
@@ -2856,10 +2871,17 @@ const SETTLE_HOLD_MS = 600;
  * view by then fades in anyway, holes filled by its own stand-ins, so a tile
  * that never arrives cannot freeze the map on the wrong level.
  */
-const LEVEL_WAIT_MAX_MS = 2500;
+//
+// Ali: "if the whole layer does not load within two seconds -- counted from
+// the actual zoom level, not the intent from the inertia -- act as if it had
+// loaded, even though all tiles have not. And if this happens, blip those
+// tiles that have not loaded again." `since` is set when the ACTUAL scale's
+// level changes (`want` is `levelFor` the real scale; the prefetch never
+// touches it), and a forced swap re-pings what is still missing.
+const LEVEL_WAIT_MAX_MS = 2000;
 /** The whole swap: the new level fading in, then the old one fading out. */
 const LEVEL_SWAP_MS = 700;
-const swapState = { cur: null, next: null, since: 0, fadeAt: 0 };
+const swapState = { cur: null, next: null, since: 0, fadeAt: 0, forcedAt: 0 };
 
 function levelSwap(want, now) {
   const S = swapState;
@@ -2871,9 +2893,12 @@ function levelSwap(want, now) {
     return { base: S.cur, top: null, alpha: 0 };
   }
   if (S.next !== want.name) { S.next = want.name; S.since = now; S.fadeAt = 0; }
-  if (!S.fadeAt
-      && (levelReady(S.next) || now - S.since > LEVEL_WAIT_MAX_MS)) {
-    S.fadeAt = now;
+  if (!S.fadeAt) {
+    if (levelReady(S.next)) S.fadeAt = now;
+    else if (now - S.since > LEVEL_WAIT_MAX_MS) {
+      S.fadeAt = now;
+      S.forcedAt = now;                       // the missing tiles re-ping
+    }
   }
   if (!S.fadeAt) {
     draw();                                   // keep checking until it is ready
