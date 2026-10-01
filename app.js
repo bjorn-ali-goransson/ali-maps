@@ -462,17 +462,27 @@ function visibleGroups(area, level) {
       continue;
     }
     if (area.pending.has(key)) continue;
+    // A bounded number in flight, so a fast zoom cannot queue thirty
+    // requests ahead of the ones the screen ends up needing. The levels in
+    // play ask first, the prefetch after, so the prefetch only gets the
+    // slots that are left.
+    if (area.pending.size >= MAX_FETCHES) continue;
     area.pending.add(key);
+    const ac = new AbortController();
+    (area.aborts || (area.aborts = new Map())).set(key, ac);
     // What happened to this tile, for the on-map debug labels.
     const why = tileWhy(area, key);
     why.s = 'fetching';
     why.t = performance.now();
     why.fetches++;
-    fetch(`${area.base}/${key}.alimap`)
+    fetch(`${area.base}/${key}.alimap`, { signal: ac.signal })
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.arrayBuffer();
-      }, (e) => { throw new Error(`network: ${e.message || e}`); })
+      }, (e) => {
+        if (e.name === 'AbortError') throw e;
+        throw new Error(`network: ${e.message || e}`);
+      })
       .then(b => {
         let lines;
         try { lines = readDrawTile(b).lines; } catch (e) {
@@ -497,11 +507,17 @@ function visibleGroups(area, level) {
         invalidate();
       })
       .catch((e) => {
+        if (e.name === 'AbortError') { why.s = 'cancelled'; why.cancels++; return; }
         why.s = 'failed';
         why.err = e.message || String(e);
         why.failures++;
       })
-      .finally(() => { area.pending.delete(key); draw(); });
+      .finally(() => {
+        area.pending.delete(key);
+        area.aborts.delete(key);
+        if (area.unwanted) area.unwanted.delete(key);
+        draw();
+      });
   }
   // While a closer level is still arriving, keep showing the coarser one
   // rather than blanking the map under somebody's finger.
@@ -509,12 +525,55 @@ function visibleGroups(area, level) {
   return out;
 }
 
+/**
+ * How many data tiles may be downloading at once, per area.
+ *
+ * Ali: "there can happen some kind of congestion with tile loading. When I
+ * zoom out very, very fast, some layers will start to become downloaded, but
+ * as I zoom out they will become hidden, and the downloading of them should
+ * be cancelled." Nothing was ever cancelled and nothing was ever capped: a
+ * fast zoom out asked for every level it passed through, and the tiles the
+ * view finally stopped on queued behind all of them.
+ */
+const MAX_FETCHES = 8;
+
+/**
+ * A download nobody has wanted for this long is aborted. Not zero: a view
+ * sitting exactly on a level boundary flips between two levels, and
+ * cancelling on the first frame would throw away and re-ask the same tiles
+ * over and over.
+ */
+const CANCEL_AFTER_MS = 300;
+
+/**
+ * Abort every download the current frame did not ask for.
+ *
+ * `area.onScreen` is refilled each frame by `visibleGroups` with every key
+ * the levels in play -- and the prefetch -- want, so anything in flight that
+ * is not in it is ground or a level the view has left.
+ */
+function cancelUnwanted(area, now) {
+  if (!area.aborts || !area.aborts.size) return;
+  const since = area.unwanted || (area.unwanted = new Map());
+  for (const [key, ac] of area.aborts) {
+    if (area.onScreen && area.onScreen.has(key)) { since.delete(key); continue; }
+    if (!since.has(key)) { since.set(key, now); continue; }
+    if (now - since.get(key) >= CANCEL_AFTER_MS) {
+      since.delete(key);
+      ac.abort();
+      rasterStats.cancelledFetches = (rasterStats.cancelledFetches || 0) + 1;
+    }
+  }
+  // Keep frames coming while something is waiting to be cancelled.
+  if (since.size) draw();
+}
+
 /** The debug record of one data tile: what last happened to it, and why. */
 function tileWhy(area, key) {
   const why = area.why || (area.why = new Map());
   let w = why.get(key);
   if (!w) {
-    w = { s: 'new', t: 0, fetches: 0, failures: 0, evictions: 0,
+    w = { s: 'new', t: 0, fetches: 0, failures: 0, evictions: 0, cancels: 0,
           err: '', lines: 0, bytes: 0, ms: 0 };
     why.set(key, w);
   }
@@ -2589,6 +2648,8 @@ function drawTileDebug(want) {
           } else if (w.s === 'failed') {
             wash = DEBUG_WASH.failed;
             lines.push(`FAILED: ${w.err}`);
+          } else if (w.s === 'cancelled' && !cached) {
+            lines.push(`cancelled (left the view) x${w.cancels}`);
           } else if (w.s === 'evicted' && !cached) {
             wash = DEBUG_WASH.evicted;
             lines.push(`EVICTED: cache full (${MAX_DECODED_TILES})`);
@@ -2781,7 +2842,7 @@ function drawRasterBanner() {
   }
   const msg2 = `skipped ${RDBG.skipped} frames total · ${rt.size} raster tiles `
     + `· ${(rtBytes / 1e6).toFixed(0)}/${(RT_MAX_BYTES / 1e6).toFixed(0)} MB`
-    + ` · ${rasterStats.evicted} evicted`;
+    + ` · ${rasterStats.evicted} evicted · ${rasterStats.cancelledFetches || 0} downloads cancelled`;
   ctx.save();
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.font = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -3014,6 +3075,7 @@ function paintFrame() {
     // Data first: the network is the slow half, and the current view's
     // tiles of the level ahead cover the middle of wherever it lands.
     if (ahead && ahead.tiled) visibleGroups(a2, ahead);
+    cancelUnwanted(a2, performance.now());
   }
 
   // Everything from here to `mapOut` is drawn north-up and turned as one.
