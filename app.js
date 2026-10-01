@@ -992,8 +992,9 @@ function drawBlips() {
       const L = sx(b.w), R = sx(b.e), Tp = sy(b.n), B = sy(b.s);
       cx = (L + R) / 2; cy = (Tp + B) / 2;
       // Half the tile's WIDTH, not its diagonal: a ring reaching the corners
-      // overlaps its neighbours and the pings merge into a front.
-      span = Math.abs(R - L);
+      // overlaps its neighbours and the pings merge into a front. A loading
+      // ping carries its width in screen pixels, fixed whatever the zoom.
+      span = b.px || Math.abs(R - L);
     }
     if (cx < -60 || cx > W + 60 || cy < -60 || cy > H + 60) continue;
     const t = age / BLIP_RING_MS;
@@ -1052,7 +1053,11 @@ function drawLoadingBlips(want, now) {
   // (and so will be drawn again). A data tile is usually bigger than the
   // whole screen, so pinging those said "something, somewhere".
   const spots = [];                           // [key, cx, cy, width]
-  if (want && want.tiled) {
+  // The overview is one file for the whole area, not data tiles; its picture
+  // tiles are waiting for as long as that file is.
+  const overviewOut = want && !want.tiled
+    && state.areas.some((a2) => a2.index && !a2.overview);
+  if (want) {
     const oct = octFor(scale);
     const keys = visibleKeys(oct);
     if (keys.length <= 200) {
@@ -1061,7 +1066,7 @@ function drawLoadingBlips(want, now) {
         const b = tileBox(oct, ix, iy);
         if (!tileOnScreen(b)) continue;
         const rec = rt.get(rtKey(want.name, oct, ix, iy));
-        const waiting = !rec || !rec.done
+        const waiting = !rec || !rec.done || overviewOut
           || (rec.missing && rec.missing.some((k) => !inHand(k)));
         if (!waiting) continue;
         // **On the part of the tile that is ON SCREEN**, not at its middle.
@@ -1113,8 +1118,13 @@ function drawLoadingBlips(want, now) {
     // to the tile meanwhile. Same list, same drawing, same look.
     const lon = (cx - ox) / (KX * scale), lat = -(cy - oy) / scale;
     const half = w / 2 / (KX * scale);
+    // `px`: the ring's size is the tile's width ON SCREEN when it started,
+    // and stays that -- Ali: "maybe the blip is absolute in size, regardless
+    // of zoom ... I don't see them at small zoom levels." Sized in ground
+    // units, a ring started just before a zoom out shrank with the map to a
+    // few pixels. The place it marks stays on the ground.
     blips.push({ kind: 'route', w: lon - half, e: lon + half, n: lat, s: lat,
-                 t0: cycle });
+                 t0: cycle, px: w });
     if (blips.length > 200) blips.shift();
   }
   for (const k of loadingSince.keys()) if (!seen.has(k)) loadingSince.delete(k);
