@@ -953,6 +953,94 @@ function drawBlips() {
   return live;
 }
 
+// ---------------------------------------------------- loading blips
+//
+// Ali: "Can you add a radar blip on a tile that is loading? Except if it is
+// a huge tile on a very, very zoomed out level, because in that case it will
+// just cover the whole screen. My intention is that we should see a small,
+// discrete indication that a tile is loading, and as such the user will know
+// that stuff is happening and they will wait for the layer to load."
+//
+// The routing blips' ring, pulsing at the middle of every tile in view that
+// is still on its way: a data tile with its request in flight, or a picture
+// tile queued or half drawn. Small on purpose -- the radius is capped in
+// screen pixels whatever the tile's size, so a big tile pings like a small
+// one -- and a tile far bigger than the screen gets none, since its middle
+// says nothing about where on the screen the waiting is.
+
+/** One pulse of a waiting tile. */
+const LOAD_BLIP_MS = 1300;
+/** The ring's largest radius, CSS px. */
+const LOAD_BLIP_R = 22;
+/** A tile has to wait this long to get a ring: a quick one never flickers. */
+const LOAD_BLIP_AFTER_MS = 180;
+/** A tile wider than this many screens gets no ring at all. */
+const LOAD_BLIP_MAX_SCREENS = 1.5;
+/** key -> when it was first seen waiting. */
+const loadingSince = new Map();
+
+function drawLoadingBlips(want, now) {
+  const W = cv.width / DPR, H = cv.height / DPR;
+  const big = Math.max(W, H) * LOAD_BLIP_MAX_SCREENS;
+  // Every data tile with a request in flight, across areas.
+  const inFlight = new Set();
+  for (const a2 of state.areas) {
+    if (a2.pending) for (const k of a2.pending) inFlight.add(k);
+  }
+  // **One per picture tile of the level being loaded**, which is the grain
+  // the waiting actually has on screen: a picture tile is either not drawn
+  // yet, or drawn while some of the road data under it is still downloading
+  // (and so will be drawn again). A data tile is usually bigger than the
+  // whole screen, so pinging those said "something, somewhere".
+  const spots = [];                           // [key, cx, cy, width]
+  if (want && want.tiled) {
+    const oct = octFor(scale);
+    const keys = visibleKeys(oct);
+    if (keys.length <= 200) {
+      for (const key of keys) {
+        const [ix, iy] = key.split(',').map(Number);
+        const b = tileBox(oct, ix, iy);
+        if (!tileOnScreen(b)) continue;
+        const rec = rt.get(rtKey(want.name, oct, ix, iy));
+        const waiting = !rec || !rec.done
+          || (rec.missing && rec.missing.some((k) => inFlight.has(k)));
+        if (waiting) spots.push([rtKey(want.name, oct, ix, iy),
+                                 b.L + b.W / 2, b.Tp + b.H / 2, b.W]);
+      }
+    }
+  }
+  const seen = new Set();
+  let live = false;
+  ctx.save();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = T.blip;
+  for (const [key, cx, cy, w] of spots) {
+    seen.add(key);
+    if (!loadingSince.has(key)) loadingSince.set(key, now);
+    live = true;                              // keep frames coming while waiting
+    if (w > big) continue;
+    const t0 = loadingSince.get(key) + LOAD_BLIP_AFTER_MS;
+    if (now < t0) continue;
+    const t = ((now - t0) % LOAD_BLIP_MS) / LOAD_BLIP_MS;
+    const r = Math.max(1.5, ease(t) * Math.min(LOAD_BLIP_R, w / 2.5));
+    ctx.globalAlpha = 0.55 * (1 - t);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+    // A dot at the centre, steady, so a ring between pulses still says
+    // "here" -- the radar's own blip.
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+    ctx.fillStyle = T.blip;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+  for (const k of loadingSince.keys()) if (!seen.has(k)) loadingSince.delete(k);
+  return live;
+}
+
 /** Bumped when new tiles land, so a scene knows its content is stale. */
 let dataEpoch = 0;
 
@@ -3015,6 +3103,7 @@ function paintFrame() {
   // On the ground, so it turns with the map -- these are squares of Riyadh,
   // not marks on the glass.
   if (span('ripple', () => drawRipples(now, pendingKeys))) draw();
+  if (drawLoadingBlips(want, now)) draw();
 
   mapOut();
 
