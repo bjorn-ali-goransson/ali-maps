@@ -1020,22 +1020,15 @@ function drawBlips() {
 // discrete indication that a tile is loading, and as such the user will know
 // that stuff is happening and they will wait for the layer to load."
 //
-// The routing blips' ring, pulsing at the middle of every tile in view that
-// is still on its way: a data tile with its request in flight, or a picture
-// tile queued or half drawn. Small on purpose -- the radius is capped in
-// screen pixels whatever the tile's size, so a big tile pings like a small
-// one -- and a tile far bigger than the screen gets none, since its middle
-// says nothing about where on the screen the waiting is.
+// The navigation blip -- the same ring `drawBlips` draws when a routing tile
+// lands -- repeated on every picture tile in view that is still on its way:
+// not drawn yet, or drawn without some of its road data. A tile far bigger
+// than the screen gets none, since a ring that size covers the screen.
 
-/** One pulse of a waiting tile. */
+/** How often a waiting tile pings: one navigation blip, then quiet. */
 const LOAD_BLIP_MS = 1300;
-/** The ring's largest radius, CSS px. */
-const LOAD_BLIP_R = 22;
 /** A tile has to wait this long to get a ring: a quick one never flickers. */
 const LOAD_BLIP_AFTER_MS = 180;
-/** The one brighter, wider ping on what was missing when a swap was forced. */
-const FORCED_BLIP_MS = 800;
-const FORCED_BLIP_R = 40;
 /** A tile wider than this many screens gets no ring at all. */
 const LOAD_BLIP_MAX_SCREENS = 1.5;
 /** key -> when it was first seen waiting. */
@@ -1077,7 +1070,7 @@ function drawLoadingBlips(want, now) {
         // the map is), pulled in from the edges, and taken back: if that
         // point is still inside the tile, the ring goes there; if not, only
         // a sliver of the tile is showing and it gets none.
-        const m = LOAD_BLIP_R + 4;
+        const m = 26;
         let [px, py] = rot(b.L + b.W / 2, b.Tp + b.H / 2);
         px = Math.min(Math.max(px, m), W - m);
         // Clear of the toolbar and badge at the top and the hint at the foot.
@@ -1092,40 +1085,29 @@ function drawLoadingBlips(want, now) {
   const seen = new Set();
   let live = false;
   ctx.save();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = T.blip;
+  ctx.lineWidth = 2;
   for (const [key, cx, cy, w] of spots) {
     seen.add(key);
     if (!loadingSince.has(key)) loadingSince.set(key, now);
     live = true;                              // keep frames coming while waiting
     if (w > big) continue;
-    // The layer was shown before this tile arrived: say so, once and louder.
-    const fa = now - swapState.forcedAt;
-    if (swapState.forcedAt && fa >= 0 && fa < FORCED_BLIP_MS) {
-      const ft = fa / FORCED_BLIP_MS;
-      ctx.globalAlpha = 0.9 * (1 - ft);
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, Math.max(2, ease(ft) * Math.min(FORCED_BLIP_R, w / 2)),
-              0, Math.PI * 2);
-      ctx.stroke();
-      ctx.lineWidth = 1.5;
-    }
-    const t0 = loadingSince.get(key) + LOAD_BLIP_AFTER_MS;
-    if (now < t0) continue;
-    const t = ((now - t0) % LOAD_BLIP_MS) / LOAD_BLIP_MS;
-    const r = Math.max(1.5, ease(t) * Math.min(LOAD_BLIP_R, w / 2.5));
-    ctx.globalAlpha = 0.55 * (1 - t);
+    // **The navigation blip, exactly** -- Ali: "use the same radar blip as
+    // is used when navigation happens." `drawBlips`' ring for a route tile:
+    // 2 px, growing to half the tile's width over `BLIP_RING_MS` and fading
+    // as it grows. A tile still waiting pings again every `LOAD_BLIP_MS`;
+    // a forced level swap restarts the ping on everything still missing.
+    let start = loadingSince.get(key) + LOAD_BLIP_AFTER_MS;
+    const fa = swapState.forcedAt;
+    if (fa && fa > start && now - fa < LOAD_BLIP_MS) start = fa;
+    if (now < start) continue;
+    const age = (now - start) % LOAD_BLIP_MS;
+    if (age > BLIP_RING_MS) continue;         // between pings
+    const t = age / BLIP_RING_MS;
+    ctx.globalAlpha = (1 - t) * 0.85;
+    ctx.strokeStyle = T.blip;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.arc(cx, cy, Math.max(1, ease(t) * (w / 2)), 0, Math.PI * 2);
     ctx.stroke();
-    // A dot at the centre, steady, so a ring between pulses still says
-    // "here" -- the radar's own blip.
-    ctx.globalAlpha = 0.45;
-    ctx.beginPath();
-    ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
-    ctx.fillStyle = T.blip;
-    ctx.fill();
   }
   ctx.globalAlpha = 1;
   ctx.restore();
