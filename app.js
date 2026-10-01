@@ -1041,14 +1041,16 @@ const LOAD_BLIP_MAX_SCREENS = 1.5;
 /** key -> when it was first seen waiting. */
 const loadingSince = new Map();
 
+let lastBlips = null;
+
 function drawLoadingBlips(want, now) {
   const W = cv.width / DPR, H = cv.height / DPR;
   const big = Math.max(W, H) * LOAD_BLIP_MAX_SCREENS;
-  // Every data tile with a request in flight, across areas.
-  const inFlight = new Set();
-  for (const a2 of state.areas) {
-    if (a2.pending) for (const k of a2.pending) inFlight.add(k);
-  }
+  // Every data tile in hand, across areas. A tile is waiting for any data
+  // tile it was drawn without that has not arrived yet -- downloading or
+  // still queued behind `MAX_FETCHES`; asking only about downloads in flight
+  // left most of a slow screen without a ring.
+  const inHand = (k) => state.areas.some((a2) => a2.tiles && a2.tiles.has(k));
   // **One per picture tile of the level being loaded**, which is the grain
   // the waiting actually has on screen: a picture tile is either not drawn
   // yet, or drawn while some of the road data under it is still downloading
@@ -1065,12 +1067,28 @@ function drawLoadingBlips(want, now) {
         if (!tileOnScreen(b)) continue;
         const rec = rt.get(rtKey(want.name, oct, ix, iy));
         const waiting = !rec || !rec.done
-          || (rec.missing && rec.missing.some((k) => inFlight.has(k)));
-        if (waiting) spots.push([rtKey(want.name, oct, ix, iy),
-                                 b.L + b.W / 2, b.Tp + b.H / 2, b.W]);
+          || (rec.missing && rec.missing.some((k) => !inHand(k)));
+        if (!waiting) continue;
+        // **On the part of the tile that is ON SCREEN**, not at its middle.
+        // Ali: "do not show the radar blip until the tile comes into the
+        // screen. As of now I can see no radar blips" -- a tile half off the
+        // edge had its middle off the edge too, so its ring pulsed where
+        // nobody could see it. Its middle is taken to the SCREEN (turned, if
+        // the map is), pulled in from the edges, and taken back: if that
+        // point is still inside the tile, the ring goes there; if not, only
+        // a sliver of the tile is showing and it gets none.
+        const m = LOAD_BLIP_R + 4;
+        let [px, py] = rot(b.L + b.W / 2, b.Tp + b.H / 2);
+        px = Math.min(Math.max(px, m), W - m);
+        // Clear of the toolbar and badge at the top and the hint at the foot.
+        py = Math.min(Math.max(py, 150), H - 80);
+        const [ux, uy] = unrot(px, py);
+        if (ux < b.L || ux > b.L + b.W || uy < b.Tp || uy > b.Tp + b.H) continue;
+        spots.push([rtKey(want.name, oct, ix, iy), ux, uy, b.W]);
       }
     }
   }
+  lastBlips = { want: want && want.name, oct: octFor(scale), spots: spots.length };
   const seen = new Set();
   let live = false;
   ctx.save();
@@ -6314,6 +6332,7 @@ window.__alimaps = {
   /** True once the flavour, its areas and the initial framing are all in. */
   get loaded() { return loaded; },
   state, rasterStats, tiles: rt, layers, swap: swapState,
+  get loadBlips() { return lastBlips; },
   view: () => ({ mpp: mpp(), ox, oy, scale }),
   level: () => state.areas.map(a => a.index && levelFor(a).name),
   // Rasterise everything the view is waiting on, synchronously. Tests need a
