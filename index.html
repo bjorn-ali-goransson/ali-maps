@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ali Maps</title>
+<meta name="description" content="A road map of Riyadh built from satellite imagery, from zero. No imported network. Routes in the browser.">
+<link rel="stylesheet" href="./style.css?v=b2e96a6cf1">
+</head>
+<body>
+<canvas id="map"></canvas>
+<div id="loading"><div class="ring"></div><span>Loading the map…</span></div>
+
+<div class="top" id="top">
+  <button class="icon" id="menu" aria-label="Menu" aria-haspopup="true"
+          aria-expanded="false" aria-controls="sheet">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 7h16M4 12h16M4 17h16"/>
+    </svg>
+  </button>
+  <select id="area" aria-label="Which district" hidden></select>
+  <span class="badge" id="badge" hidden></span>
+  <span id="where"></span>
+  <!-- The corner the hamburger left. Ali, 2026-10-10: "Can you put the
+       browser location button in that place instead?" -->
+  <button class="icon" id="locate" aria-label="Show where I am"
+          title="Show where I am">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="12" cy="12" r="5.4"/>
+      <path d="M12 1.9v3.3M12 18.8v3.3M1.9 12h3.3M18.8 12h3.3"/>
+      <circle class="dot" cx="12" cy="12" r="1.6"/>
+    </svg>
+  </button>
+</div>
+
+<!-- Everything the toolbar used to hold, in one place. Ali, 2026-10-10:
+     "for switching versions, I guess we can have that under a right top
+     orientated hamburger menu that can switch versions, report a bug, and
+     the versions can also change to OpenStreetMap that we already have." -->
+<div id="sheet" hidden>
+  <h4>Which map</h4>
+  <div id="maps"></div>
+  <hr>
+  <button id="bug">
+    <span class="tick"></span>
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M8 6a4 4 0 0 1 8 0"/>
+      <path d="M9.5 4.2 8 2.6M14.5 4.2 16 2.6"/>
+      <rect x="7.5" y="6" width="9" height="12" rx="4.5"/>
+      <path d="M7.5 10H4M7.5 14H3.6M8 17.6 5 20M16.5 10H20M16.5 14h3.9M16 17.6 19 20"/>
+      <path d="M12 6v12"/>
+    </svg>
+    <span>Report a bug</span>
+  </button>
+</div>
+
+
+<div id="nav">
+  <button class="grip" id="navgrip" aria-label="Close the route"><i></i></button>
+  <header>
+    <b id="navdist">—</b>
+    <span id="navtime"></span>
+    <div class="seg" id="viewmode" role="radiogroup" aria-label="Map view">
+      <button role="radio" data-mode="2d" aria-checked="true">2D</button>
+      <button role="radio" data-mode="3d" aria-checked="false">3D</button>
+    </div>
+  </header>
+  <ol id="steps"></ol>
+  <div id="navfoot"></div>
+</div>
+
+<div id="nav3dwrap">
+  <canvas id="nav3d" width="300" height="170"></canvas>
+  <div id="nav3dlabel">Start of the journey</div>
+  <button id="toggle3d" aria-pressed="false" title="Driver's view">3D</button>
+</div>
+
+<button class="home" id="home" hidden>
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g id="homearrow">
+    <path d="M12 20V5"/><path d="M12 4 6.5 11M12 4l5.5 7"/>
+  </g></svg>
+  <span id="homename">Back to the map</span>
+</button>
+
+<!-- What a `?marker=` says when it is tapped. A DOM bubble and not canvas
+     text, because it carries a LINK and a link drawn on a canvas is a link
+     nobody can open, copy or read aloud. -->
+<div id="marker" hidden></div>
+
+<div class="hint" id="hint" hidden></div>
+<div id="raster-toast"></div>
+
+<div class="credit" id="credit"><span class="ours"></span></div>
+<a class="brand" id="brand" href="https://maps.ali-web-services.com/" target="_blank" rel="noopener">Ali Maps</a>
+
+<script>window.ALIMAPS_DATA = 'https://pub-49a6285381e141dfa1f0e6fcbf475ab6.r2.dev/';</script>
+<script type="module" src="./app.js?v=b2e96a6cf1"></script>
+</body>
+</html>

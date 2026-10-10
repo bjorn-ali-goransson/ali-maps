@@ -1,0 +1,12 @@
+{
+ "format": "ali.maps.versions/1",
+ "latest": "local",
+ "versions": [
+  {
+   "id": "local",
+   "label": "This build",
+   "base": "",
+   "builtAt": "2026-10-10"
+  }
+ ]
+}
